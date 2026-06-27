@@ -4,6 +4,7 @@
 
 # 🤖 Gennady
 
+[![Tests](https://img.shields.io/github/actions/workflow/status/noiseonwires/gennady/test.yml?branch=main&label=tests)](https://github.com/noiseonwires/gennady/actions/workflows/test.yml)
 [![Build and Publish Docker Image](https://img.shields.io/github/actions/workflow/status/noiseonwires/gennady/docker-image.yml?branch=main&label=docker%20build)](https://github.com/noiseonwires/gennady/actions/workflows/docker-image.yml)
 [![Check i18n & assets](https://img.shields.io/github/actions/workflow/status/noiseonwires/gennady/check-i18n.yml?branch=main&label=i18n%20%26%20assets)](https://github.com/noiseonwires/gennady/actions/workflows/check-i18n.yml)
 [![Latest release](https://img.shields.io/github/v/release/noiseonwires/gennady?sort=semver)](https://github.com/noiseonwires/gennady/releases)
