@@ -1,0 +1,173 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (c) 2025 Kirill aka Noiseonwires */
+
+/* ── Variables ── */
+:root {
+    --bg: #121218;
+    --bg2: #1a1a24;
+    --bg3: #22222e;
+    --card: #1e1e2a;
+    --border: #2e2e3e;
+    --text: #e0dfe6;
+    --text2: #9896a8;
+    --accent: #6e5cb8;
+    --accent2: #a78bfa;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --radius: 0;
+    --shadow: 0 2px 8px rgba(0, 0, 0, .3);
+}
+
+/* ── API Error Banner ── */
+.api-error-banner {
+    background: var(--red);
+    color: #fff;
+    padding: .75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    border-radius: 0;
+    margin-bottom: 1rem;
+    font-size: .95rem;
+    flex-wrap: wrap;
+}
+
+.api-error-banner button {
+    background: rgba(255,255,255,.2);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,.4);
+    padding: .35rem .75rem;
+    border-radius: 0;
+    font-size: .85rem;
+    white-space: nowrap;
+}
+
+.api-error-banner button:hover {
+    background: rgba(255,255,255,.35);
+}
+
+.api-error-banner .dismiss-btn {
+    margin-left: auto;
+    border: none;
+    background: transparent;
+    font-size: 1.2rem;
+    padding: .2rem .5rem;
+}
+
+/* ── Reset ── */
+[x-cloak] { display: none !important; }
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+a {
+    color: var(--accent2);
+    text-decoration: none;
+}
+
+input, select, textarea, button {
+    font-family: inherit;
+    font-size: .95rem;
+}
+
+button {
+    cursor: pointer;
+}
+
+/* ── Login ── */
+.login-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 1rem;
+}
+
+.login-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 0;
+    padding: 2.5rem;
+    width: 360px;
+    max-width: 100%;
+    box-shadow: var(--shadow);
+    text-align: center;
+}
+
+.login-card h1 {
+    font-size: 1.5rem;
+    margin-bottom: .5rem;
+}
+
+.login-logo {
+    width: 128px;
+    height: 128px;
+    display: block;
+    margin: 0 auto 1rem;
+    border-radius: 50%;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, .45);
+}
+
+.login-card p {
+    color: var(--text2);
+    margin-bottom: 1.5rem;
+    font-size: .9rem;
+}
+
+.login-card input {
+    width: 100%;
+    padding: .75rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--bg3);
+    color: var(--text);
+    text-align: center;
+    font-size: 1.4rem;
+    letter-spacing: .5rem;
+    margin-bottom: 1rem;
+}
+
+.login-card button {
+    width: 100%;
+    padding: .75rem;
+    border: none;
+    border-radius: 0;
+    background: var(--accent);
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 600;
+    transition: background .2s;
+}
+
+.login-card button:hover {
+    background: var(--accent2);
+}
+
+.login-error {
+    color: var(--red);
+    margin-top: .75rem;
+    font-size: .9rem;
+    min-height: 1.3em;
+}
+.login-source {
+    margin-top: 1.25rem;
+    font-size: .8rem;
+    opacity: .55;
+}
+.login-source a {
+    color: inherit;
+}
+

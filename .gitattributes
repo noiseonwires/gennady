@@ -1,0 +1,4 @@
+# Keep shell scripts and systemd unit files LF-terminated so they run on Linux
+# regardless of a contributor's core.autocrlf setting.
+*.sh      text eol=lf
+*.service text eol=lf

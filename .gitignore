@@ -1,0 +1,117 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+modernmoderator
+modernmoderator.exe
+telegram-moderation-bot
+telegram-moderation-bot.exe
+moderation-bot
+moderation-bot.exe
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# Configuration files with sensitive data
+config.json
+config.yaml
+config.*.yaml
+# Catch space/paren variants such as "config (10).yaml" that the patterns above miss
+config*.yaml
+!config.example.yaml
+config.json.old.txt
+*.env
+.env
+.env.local
+.env.*.local
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+moderation.db
+
+# Runtime message/prompt dumps
+db/
+logs/
+
+# Log files
+*.log
+logs/
+log/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+desktop.ini
+
+# Linux
+*~
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Build artifacts
+/build/
+/dist/
+
+# Service files
+# Ignore stray/local unit files, but keep the bot's own systemd unit.
+*.service
+!gennadium.service
+
+# Backup files
+*.bak
+*.backup
+
+# Coverage reports
+coverage.txt
+coverage.out
+coverage.html
+
+# Air live reload tool
+tmp/
+
+# Local development scripts
+run.sh
+debug.sh
+deploy.sh
+test-version.sh
+test-version.bat
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+*.log
+
+# Archives
+*.zip
+*.tar.gz
+*.rar

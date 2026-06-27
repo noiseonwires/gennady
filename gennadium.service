@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# systemd unit for the Gennady Telegram moderation bot.
+# Installed to /etc/systemd/system/gennadium.service by ./install.sh.
+
+[Unit]
+Description=Gennady - AI Telegram moderation bot
+Documentation=https://github.com/noiseonwires/gennady
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=telegram-bot
+Group=telegram-bot
+WorkingDirectory=/opt/gennadium
+ExecStart=/opt/gennadium/gennadium -config /opt/gennadium/config.yaml
+Restart=on-failure
+RestartSec=5
+
+# Set the timezone so scheduled events (morning greeting, daily summary, RSS)
+# fire at the right local time. Override with your zone, e.g. TZ=Europe/Prague.
+Environment=TZ=UTC
+
+# --- Sandboxing / hardening ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+# The bot reads its config and writes the SQLite database under this directory.
+ReadWritePaths=/opt/gennadium
+
+[Install]
+WantedBy=multi-user.target

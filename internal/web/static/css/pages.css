@@ -1,0 +1,511 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (c) 2025 Kirill aka Noiseonwires */
+
+/* ── Messages Page ── */
+.msg-list {
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+}
+
+.msg-card {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 0;
+    padding: .75rem 1rem;
+}
+
+.msg-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: .25rem;
+}
+
+.msg-card-user {
+    font-weight: 600;
+    font-size: .92rem;
+    color: var(--accent2);
+}
+
+/* Clickable username/profile affordance on message cards. */
+.msg-card-user-link {
+    cursor: pointer;
+}
+.msg-card-user-link:hover {
+    text-decoration: underline;
+}
+
+/* Small inline icon button (e.g. "view messages" on a profile card). */
+.msg-icon-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text2);
+    cursor: pointer;
+    font-size: .8rem;
+    line-height: 1;
+    padding: .15rem .4rem;
+    border-radius: 3px;
+    transition: color .15s, border-color .15s, background .15s;
+}
+.msg-icon-btn:hover {
+    color: var(--accent2);
+    border-color: var(--accent2);
+    background: var(--bg3);
+}
+
+/* ── Reply chain (lazy, recursive "Reply to" viewer) ── */
+.msg-reply-chain {
+    margin: .25rem 0 .4rem;
+}
+.msg-reply-toggle {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent2);
+    cursor: pointer;
+    font-size: .82rem;
+    font-family: inherit;
+    text-align: left;
+}
+.msg-reply-toggle:hover {
+    text-decoration: underline;
+}
+.msg-reply-node {
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent2);
+    background: var(--bg);
+    border-radius: 3px;
+    padding: .4rem .6rem;
+    margin-top: .35rem;
+}
+.msg-reply-status {
+    margin-top: .35rem;
+    font-size: .82rem;
+}
+
+.msg-card-time {
+    font-size: .8rem;
+    color: var(--text2);
+}
+
+.msg-card-meta {
+    font-size: .78rem;
+    color: var(--text2);
+    margin-bottom: .4rem;
+}
+
+.msg-delete-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text2);
+    cursor: pointer;
+    font-size: .75rem;
+    line-height: 1;
+    padding: .15rem .35rem;
+    border-radius: 3px;
+    opacity: 0;
+    transition: opacity .15s;
+}
+.msg-card:hover .msg-delete-btn { opacity: 1; }
+.msg-delete-btn:hover { color: #e74c3c; border-color: #e74c3c; }
+
+/* Moderation action buttons (warn / mute / cruel mute / unmute) */
+.mod-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text2);
+    cursor: pointer;
+    font-size: .8rem;
+    line-height: 1;
+    padding: .15rem .4rem;
+    border-radius: 3px;
+    opacity: .55;
+    transition: opacity .15s, color .15s, border-color .15s, background .15s;
+}
+.msg-card:hover .mod-btn,
+tr:hover .mod-btn { opacity: 1; }
+.mod-btn:hover {
+    opacity: 1;
+    background: var(--bg3);
+    color: var(--text);
+}
+.mod-btn-warn:hover   { border-color: var(--yellow);  color: var(--yellow); }
+.mod-btn-mute:hover   { border-color: var(--red);     color: var(--red); }
+.mod-btn-cmute:hover  { border-color: var(--red);     color: var(--red); }
+.mod-btn-unmute:hover { border-color: var(--green);   color: var(--green); }
+.mod-btn-delete-chat:hover { border-color: var(--red); color: var(--red); }
+
+/* Collapsible moderation menu (⋯ trigger + popup with action buttons) */
+.mod-menu {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+.mod-btn-toggle {
+    font-weight: bold;
+    padding: .15rem .45rem;
+    color: var(--text2);
+}
+.mod-btn-toggle:hover {
+    color: var(--accent2);
+    border-color: var(--accent2);
+    background: var(--bg3);
+}
+.mod-menu-popup {
+    position: absolute;
+    top: calc(100% + .3rem);
+    right: 0;
+    display: inline-flex;
+    gap: .35rem;
+    padding: .35rem;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .5);
+    z-index: 10;
+    white-space: nowrap;
+}
+.mod-menu-popup .mod-btn { opacity: 1; }
+
+.msg-card-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: .9rem;
+    line-height: 1.45;
+}
+
+.msg-spoiler {
+    margin-top: .4rem;
+}
+
+.msg-spoiler.msg-reply {
+    border-left: 2px solid var(--accent2);
+    padding-left: .5rem;
+    margin-bottom: .25rem;
+}
+
+.msg-spoiler.msg-mod-reason {
+    border-left: 2px solid var(--yellow);
+    padding-left: .5rem;
+}
+
+.msg-spoiler.msg-mod-reason summary {
+    color: var(--yellow);
+}
+
+.msg-spoiler.msg-tg-profile {
+    border-left: 2px solid var(--red);
+    padding-left: .5rem;
+}
+
+.msg-spoiler.msg-tg-profile summary {
+    color: var(--red);
+}
+
+.msg-spoiler summary {
+    cursor: pointer;
+    color: var(--accent2);
+    font-size: .85rem;
+}
+
+.msg-extra-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: .85rem;
+    color: var(--text2);
+    margin-top: .35rem;
+}
+
+.msg-pager {
+    margin-top: .75rem;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+    font-size: .9rem;
+}
+
+.msg-pager button {
+    padding: .35rem .75rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--accent2);
+    font-size: .85rem;
+    cursor: pointer;
+    transition: background .15s;
+}
+
+.msg-pager button:hover {
+    background: var(--bg3);
+}
+
+/* Numbered page buttons (messages + profiles pagers). */
+.pager-page {
+    min-width: 2rem;
+    text-align: center;
+}
+
+.pager-page.active {
+    background: var(--accent2);
+    color: var(--bg1);
+    border-color: var(--accent2);
+    cursor: default;
+}
+
+.pager-page:disabled {
+    border-color: transparent;
+    color: var(--text2);
+    cursor: default;
+    background: transparent;
+}
+
+/* ── Profiles toolbar (sort) ── */
+.prof-toolbar {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+    margin-bottom: .75rem;
+    font-size: .9rem;
+}
+
+.prof-sort-label {
+    color: var(--text2);
+}
+
+.prof-sort-btn {
+    padding: .35rem .75rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--accent2);
+    font-size: .85rem;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.prof-sort-btn:hover {
+    background: var(--bg3);
+}
+
+.prof-sort-btn.active {
+    background: var(--accent2);
+    color: var(--bg1);
+    border-color: var(--accent2);
+}
+
+/* Username search box in the profiles toolbar. */
+.prof-search-wrap {
+    margin-left: auto;
+}
+
+.prof-search {
+    padding: .35rem .6rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--bg1);
+    color: var(--text);
+    font-size: .85rem;
+    min-width: 14rem;
+}
+
+.prof-search:focus {
+    outline: none;
+    border-color: var(--accent2);
+}
+
+/* ── Log Viewer ── */
+.logs-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: .75rem;
+    font-size: .9rem;
+}
+
+.log-viewer {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0;
+    padding: .75rem;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: .8rem;
+    line-height: 1.5;
+    max-height: 70vh;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text2);
+}
+
+/* ── Hamburger (hidden on desktop) ── */
+.menu-toggle {
+    display: none;
+    position: fixed;
+    top: .6rem;
+    left: .6rem;
+    z-index: 1001;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 0;
+    color: var(--text);
+    font-size: 1.3rem;
+    padding: .35rem .55rem;
+    cursor: pointer;
+}
+
+.sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .5);
+    z-index: 999;
+}
+
+/* ── Mobile ── */
+@media (max-width: 768px) {
+    .menu-toggle {
+        display: block;
+    }
+
+    .sidebar {
+        position: fixed;
+        left: -260px;
+        top: 0;
+        bottom: 0;
+        z-index: 1000;
+        width: 240px;
+        transition: left .25s ease;
+    }
+
+    .sidebar.open {
+        left: 0;
+    }
+
+    .sidebar-overlay.open {
+        display: block;
+    }
+
+    .sidebar h2 {
+        padding-top: .5rem;
+    }
+
+    .main {
+        padding: .75rem;
+        max-height: none;
+        margin-left: 0;
+    }
+
+    .main h1 {
+        font-size: 1.2rem;
+        padding-left: 2.5rem;
+    }
+
+    .login-card {
+        padding: 1.5rem;
+    }
+
+    .login-card input {
+        font-size: 1.2rem;
+        letter-spacing: .3rem;
+    }
+
+    .file-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .diag-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    }
+
+    .section-header h3 {
+        font-size: .95rem;
+    }
+
+    .rss-item .rss-row {
+        flex-direction: column;
+        gap: .4rem;
+    }
+
+    .rss-item input {
+        min-width: 0;
+        width: 100%;
+    }
+}
+
+/* ── Message Preview Popup ── */
+.msg-preview-trigger {
+    cursor: pointer;
+    font-size: 1.1rem;
+    opacity: .7;
+    transition: opacity .15s;
+}
+.msg-preview-trigger:hover { opacity: 1; }
+
+.msg-popup-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.msg-popup {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 0;
+    width: min(90vw, 500px);
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.msg-popup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: .75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+}
+.msg-popup-close {
+    background: none;
+    border: none;
+    color: var(--text2);
+    font-size: 1.4rem;
+    cursor: pointer;
+    line-height: 1;
+}
+.msg-popup-close:hover { color: var(--red); }
+.msg-popup-body {
+    padding: 1rem;
+}
+.msg-popup-text {
+    margin-top: .5rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--bg);
+    padding: .75rem;
+    border: 1px solid var(--border);
+}
+.msg-popup-reason {
+    margin-top: .85rem;
+}
+.msg-popup-reason > strong {
+    font-size: .8rem;
+    color: var(--yellow);
+}
+
+/* ── Action badge on message cards ── */
+.badge-sm {
+    font-size: .65rem;
+    padding: .1rem .4rem;
+}
+.msg-card-actioned {
+    border-left: 3px solid var(--yellow);
+}

@@ -1,0 +1,612 @@
+# Gennady - Configuration Template
+# Copy this file to config.yaml and fill in your values.
+# All settings can be overridden via environment variables (see --export-env).
+
+bot_token: "TOKEN_HERE"
+language: "ru"                        # Bot language: "ru" or "en"
+# proxy_url: "socks5://127.0.0.1:1080"  # Optional HTTP/SOCKS5 proxy for outgoing requests
+
+# ─── Database ────────────────────────────────────────────────────────
+# Supported providers: "local" (default) and "remote".
+# For "local": set path to the SQLite file.
+# For "remote": set url and auth_token.
+# If provider is left empty or set to an unknown value, it is auto-detected:
+# both url and auth_token set → "remote", otherwise "local".
+database:
+  provider: "local"                   # "local" or "remote" (or leave empty for auto-detect)
+  path: "db/moderation.db"            # Local SQLite file path
+  # url: "libsql://your-db.turso.io"  # Remote database URL
+  # auth_token: ""                    # Auth token for remote providers
+
+# ─── Reactions (emoji overrides) ─────────────────────────────────────
+# All reactions have sensible defaults - only override if needed.
+# reactions:
+#   suspicious_message: "🤔"       # AI is analyzing a message
+#   bad_message: "🍌"              # Bad words detected
+#   content_filter: "🥴"           # Content filter violation
+#   creative_reply_limit: "🥱"     # Creative reply rate limit hit
+#   extracting_link: "✍"           # Fetching link content
+#   extract_link_failed: "🌚"      # Link extraction failed
+#   user_muted: "🤮"               # User was muted
+#   report_acknowledged: "👌"      # User report received
+#   creative_reply_error: "😐"     # Error generating creative reply
+
+# ─── Admin ───────────────────────────────────────────────────────────
+admin:
+  chat_id: -ID_HERE
+  reply_message_ids: [ID_HERE]
+  super_admin_user_id: 0
+  notify_super_admin: false        # also send moderation alerts to super-admin DM
+  notify_startup: false            # DM the super-admin on start/restart and remote-DB connection loss/recovery
+  whitelist_user_ids: []
+
+# ─── Moderation ──────────────────────────────────────────────────────
+# ── Topic scope model (used by every (chat, topic) list below) ──
+#   topic: -1  (alias: any)  → any topic in the chat (incl. the main area)
+#   topic: 0   (alias: main) → the chat's main area only (no forum thread)
+#   topic: N                 → a specific forum thread id
+# In object form both `chat` and `topic` are REQUIRED. A bare integer is a
+# shorthand for the lone moderation chat (only when exactly one is configured).
+# Tip: get a topic id by copying a message link in that topic - the middle
+# number in https://t.me/c/<chat>/<TOPIC_ID>/<msg> is the topic id.
+moderation:
+  chat_id: -ID_HERE                # single ID or list: [-ID1, -ID2]
+  # Topics excluded from AI content analysis. Examples:
+  #   excluded_topics: [42, 43]                  # single-chat shorthand
+  #   excluded_topics:
+  #     - {chat: -100111, topic: 42}
+  #     - {chat: -100222, topic: -1}             # whole chat
+  excluded_topics: []
+  mute_across_all_chats: false
+
+# ─── Message Deletion (from chat) ───────────────────────────────────
+message_deletion:
+  enabled: true
+  # Where auto-deletion applies. Empty = every moderation chat, any topic.
+  #   included_topics: [{chat: -100111, topic: -1}]   # whole chat
+  #   included_topics: [{chat: -100111, topic: 0}]    # main area only
+  included_topics: []
+  # Pairs that override included_topics - never auto-deleted.
+  excluded_topics: []
+  excluded_user_ids: []
+  chat_deletion_retention_hours: 3  # delete messages older than N hours
+  cleanup_interval_hours: 3         # run deletion routine every N hours
+
+# ─── Database Cleanup ───────────────────────────────────────────────
+database_cleanup:
+  cleanup_interval_hours: 24        # run DB cleanup every N hours
+  message_retention_hours: 168      # keep message_info records for 7 days
+  warning_retention_hours: 168
+  action_retention_hours: 168
+  preserve_warned_muted_messages: false  # keep messages that caused a warn/active mute until it is cleared/expired
+
+# ─── Scheduled Events (missed event recovery) ─────────────────────
+scheduled_events:
+  missed_event_max_delay_minutes: 60  # fire missed events only if ≤ N minutes late
+  webhook_mode: false                 # when true, scheduled events run only on webhook trigger (not automatically)
+  webhook_path: "/trigger-events"     # URL path for the webhook trigger endpoint
+  lock_timeout_minutes: 15            # minutes before a stale lock is reclaimed (prevents duplicate runs in multi-instance deployments)
+
+# ─── Debug ───────────────────────────────────────────────────────────
+debug:
+  debug_telegram: false           # log Telegram updates, commands, callbacks
+  debug_external_apis: false      # log all external API requests and responses
+  debug_api_errors: false         # log only failed API requests (error codes + trimmed output)
+  trace_topics: false             # TRACE forum-topic fields (message_thread_id, reply_to) on inbound + outbound
+  dump_moderation_messages: false
+  dump_admin_messages: false
+  message_dump_path: "./logs"
+  send_to_super_admin: false      # send enabled debug logs to super-admin TG user
+
+# ─── Server (shared HTTP server settings for webhook and web UI) ────
+server:
+  listen_addr: "0.0.0.0"
+  listen_port: 8080
+  # certificate_path: "/path/to/cert.pem"    # TLS certificate for self-signed setups
+
+# ─── Webhook (optional, default is long-polling) ────────────────────
+webhook:
+  enabled: false
+  debug: false              # log raw webhook payloads (verbose)
+  secret_token: ""          # optional shared secret validated on each webhook request
+  url: "https://bot.example.com/webhook"
+
+# ─── Web UI (admin panel) ───────────────────────────────────────────
+web_ui:
+  enabled: false
+  path_prefix: "/admin"   # URL path prefix for the web UI
+  password: ""             # Admin panel password (leave empty to disable auth)
+  otp_enabled: true        # Require OTP via Telegram as 2FA (needs super_admin_user_id set)
+
+# ─── User Profiles (general tracking, not AI) ────────────────────────
+# When enabled, the bot records per-user data on every message in moderation chats:
+#   • username / display-name change history
+#   • timestamp of the first message seen in each moderation chat
+#   • per-day message counters (last 7 days are shown in the moderation summary
+#     as a compact plot, e.g. [..i..IiI] - '.' = no messages, 'i' = <10, 'I' = ≥10)
+# This is independent from ai.user_profiles (AI-generated behavior profiles).
+# All tracking is hot-path driven - no daily schedule is required. Old per-day
+# rows are pruned automatically by the regular database_cleanup task.
+user_profiles:
+  enabled: false
+  # When user_profiles.enabled is true, the bot alerts the admin chat whenever
+  # a newly tracked user_id is using a @username previously held by a different
+  # user_id (catches "delete account + re-register with the same handle").
+  # Set this to true to suppress that alert while keeping profile tracking on.
+  disable_username_reuse_alerts: false
+
+# ─── AI ──────────────────────────────────────────────────────────────
+ai:
+  enabled: true
+  chat_rules: ""                      # Chat rules text injected into AI moderation prompts via {{chat_rules}}
+  # Per-chat additions appended to chat_rules whenever {{chat_rules}} is
+  # rendered for that chat. Use this to add rules that only apply to one chat
+  # without duplicating the shared baseline.
+  # chat_rules_overrides:
+  #   - chat: -100111
+  #     rules: "Extra rules just for this chat."
+  # warning_mute: "Пользователь находится в муте ещё {{muted_for}}."  # Added to warning prompt via {{mute_info}} placeholder
+
+  # Subscribe to message-reaction updates and store per-message emoji→count,
+  # which is surfaced to the daily summary, creative replies and user-profile
+  # prompts. Requires the bot to be a chat administrator for per-user reaction
+  # events; anonymous aggregate counts work without admin.
+  track_reactions: false
+
+  # light_model and full_model both accept a list of endpoints with automatic
+  # failover (the bot rotates to the next entry when one fails). A single entry
+  # is the common case.
+  #
+  # Each entry supports two providers via the optional `provider` field:
+  #   provider: azure   → Azure OpenAI. endpoint is the resource base URL,
+  #                       deployment_name is the Azure deployment, auth via api-key header.
+  #   provider: openai  → OpenAI or any OpenAI-compatible gateway (OpenRouter,
+  #                       Groq, LiteLLM, local Ollama, …). endpoint is the API
+  #                       base (e.g. https://api.openai.com/v1), deployment_name
+  #                       is the model id (e.g. gpt-4o), auth via Bearer token.
+  # When `provider` is omitted it is auto-detected: endpoints containing "azure"
+  # → azure, everything else → openai.
+  light_model:
+    - provider: "azure"
+      endpoint: "https://YOUR_ENDPOINT.openai.azure.com/"
+      api_key: "KEY_HERE"
+      deployment_name: "gpt-4o-mini"
+      temperature: 0.5
+      omit_max_tokens: false   # set true for models that reject the max_tokens param (e.g. some gpt-5 deployments)
+
+  # full_model supports multiple endpoints with automatic failover.
+  # Example below mixes an Azure primary with an OpenAI fallback.
+  full_model:
+    - provider: "azure"
+      endpoint: "https://YOUR_PRIMARY.openai.azure.com/"
+      api_key: "KEY_HERE"
+      deployment_name: "gpt-4o"
+      temperature: 0.7
+      omit_max_tokens: false
+    - provider: "openai"
+      endpoint: "https://api.openai.com/v1"
+      api_key: "sk-YOUR_OPENAI_KEY"
+      deployment_name: "gpt-4o"
+      temperature: 0.7
+      omit_max_tokens: false
+
+  # ── AI Feature Toggles ──
+  # Multi-line prompts use YAML literal block scalars (|) for readability.
+  content_moderation:
+    enabled: true
+    skip_admin_users: true
+    # When a user reports a message by replying to it and mentioning the bot in
+    # a moderation chat, the bot first re-runs AI moderation across every
+    # distinct configured model (like the WebUI "moderate again" action) and
+    # acts on the message automatically if any model flags it. Only when every
+    # model clears the message does this setting decide what happens next:
+    #   true  (default) → fall back to manual moderation (post the admin card)
+    #   false           → end the complaint silently without bothering admins
+    complaint_manual_moderation: true
+    default_mute_minutes: 60      # Duration (minutes) for the `mute` auto-action; 0 = forever
+    # Per-rule routing of the LLM's moderation verdict to an action.
+    # Each rule pairs a case-insensitive substring of the LLM's response with
+    # one of: report | warn | mute | delete. Rules are evaluated in declaration
+    # order and every matching rule fires (so you can stack e.g. mute + delete
+    # on the same trigger). The mute action uses default_mute_minutes above.
+    # Legacy `action: ban` values are silently treated as `mute` for backward
+    # compatibility. Automatic actions are attributed to the bot in the actions
+    # log; admin notifications can be silenced per-rule.
+    rules:
+      - trigger: "spam"
+        action: delete
+        description: "Spam / promo links"
+        notify_admin: true
+      - trigger: "profanity"
+        action: warn
+        description: "Profanity / personal insults"
+        notify_admin: true
+      - trigger: "nsfw"
+        action: mute
+        description: "NSFW content"
+        notify_admin: true
+      - trigger: "unsure"
+        action: report
+        description: "Borderline - let admins decide"
+        notify_admin: true
+    vision_enabled: true
+    vision_endpoint: "https://YOUR_VISION_ENDPOINT.cognitiveservices.azure.com/"
+    vision_api_key: "YOUR_VISION_KEY_HERE"
+    content_safety_enabled: false
+    content_safety_endpoint: "https://YOUR_SAFETY_ENDPOINT.cognitiveservices.azure.com/"
+    content_safety_api_key: "YOUR_SAFETY_KEY_HERE"
+    # On a new user's first message, screen their whole public profile: name,
+    # bio and profile photo, plus their linked personal channel (name,
+    # description, photo) when present. Photos are screened with Azure Content
+    # Safety first, and only described via Vision / OCR.space when Content Safety
+    # is unavailable or fails; all the gathered text is judged by the AI prompt
+    # below. Findings are added to their profile before AI moderation runs.
+    # One-shot per user per chat. Works without content_safety_enabled.
+    new_user_profile_check_enabled: false
+    new_user_profile_prompt:
+      system: |
+        You are a moderation assistant screening a new chat member's public profile.
+        You are given their name, bio and a description of their profile photo, and,
+        if present, the name, description and photo of their linked personal channel.
+        Identify signals of spam, scams, paid promotion, adult/NSFW content, hate
+        speech, or other policy-violating intent. Reply with a single short line. If
+        nothing is concerning, reply with exactly CLEAN. Otherwise reply with a brief
+        description of the concern.
+      user: |
+        Analyze the following profile:
+
+        {{profile_text}}
+    # A user counts as "new" until this many hours after their first observed
+    # message. New users get a prominent marker injected into the moderation
+    # {{user_profile}} / {{user_reputation}} context, and the {{new_user_rules}}
+    # placeholder below expands to new_user_rules for them. Defaults to 24.
+    new_user_window_hours: 24
+    # Extra rules text injected into the {{new_user_rules}} moderation-prompt
+    # placeholder, but ONLY when the message being moderated is from a new user
+    # (see new_user_window_hours). Empty by default - the placeholder expands to
+    # nothing until you configure it. Example: stricter link/promo rules for
+    # first-time posters.
+    new_user_rules: ""
+    # Max length (in UTF-8 characters, not bytes) of the quoted "in reply to"
+    # text injected into the moderation prompt's {{reply_to}} placeholder.
+    # Longer parent/quoted messages are truncated with an ellipsis (truncation
+    # never splits a character). Set to 0 to disable the cap. Defaults to 500.
+    reply_context_max_chars: 500
+    # OCR.space cloud OCR API (https://ocr.space/ocrapi) - no self-hosting needed.
+    # Free tier: 25,000 requests/month, 1 MB file limit. Fallback order is
+    # Azure Vision → OCR.space (each tier is tried only when the previous one is
+    # disabled or fails).
+    ocrspace_enabled: false
+    ocrspace_api_key: "YOUR_OCRSPACE_KEY_HERE"  # test key: helloworld
+    ocrspace_url: "https://api.ocr.space/parse/image"
+    ocrspace_language: "eng"  # 3-letter code (eng, rus, cze); engines 2/3 also accept "auto"
+    ocrspace_engine: 2        # 1=default, 2=best all-round (memes/noisy), 3=highest accuracy
+    prompt:
+      system: |
+        Ты - система анализа контента для модерации чата. Твоя единственная задача -
+        классифицировать сообщение по одной или нескольким категориям нарушений.
+
+        Доступные категории (ярлыки, которые нужно выводить дословно, в нижнем регистре):
+        - spam      - реклама, промо-ссылки, массовая рассылка, схемы заработка
+        - profanity - мат на русском/английском/чешском, грубые личные оскорбления
+        - nsfw      - порнография, шок-контент, явные сексуальные описания
+        - unsure    - есть подозрение на нарушение, но не уверен; пусть решит админ
+        - ok        - сообщение чистое, нарушений нет
+
+        Если предоставлен профиль пользователя, учитывай его при анализе:
+        - Если пользователь обычно общается в грубоватом/разговорном стиле и его репутация нормальная,
+          не считай привычный для него стиль нарушением.
+        - Если поведение резко отличается от его обычного стиля в сторону агрессии,
+          оскорблений или троллинга - это нарушение.
+        - Для пользователей с плохой репутацией будь строже.
+
+        Реагируй только на серьёзные нарушения. Можно вернуть несколько ярлыков
+        через запятую, если подходит больше одного (например: "spam, profanity").
+        Отвечай ТОЛЬКО ярлыками из списка выше. Никаких других слов, объяснений
+        или знаков препинания, кроме запятых-разделителей.
+
+        Правила чата: {{chat_rules}}
+      user: |
+        Классифицируй сообщение по категориям нарушений из системного промпта.
+        Если нарушений нет - ответь "ok".
+        {{user_profile}}
+        {{new_user_rules}}
+        {{reply_to}}
+
+        Сообщение для анализа:
+        «{{message}}»
+
+        Ответ (только ярлыки через запятую):
+    warning_prompt:
+      system: |
+        Ты - профессиональный модератор в русскоязычном Telegram чате по имени Геннадий.
+        Твоя задача - создать персонализированное предупреждение для пользователя.
+
+        Предупреждение должно быть:
+        - На русском языке
+        - Персональным (используй имя пользователя)
+        - Ясно объясняющим проблему, основываясь на содержании сообщения
+        - Содержать эмодзи ⚠️
+        - Длиной 1-2 предложения
+
+        Правила чата: {{chat_rules}}
+      user: "Создай персонализированное предупреждение для пользователя {{username}}.{{user_message}}"
+
+  creative_replies:
+    enabled: true
+    use_full_model: true
+    max_messages: 3
+    time_window: 3
+    # Where creative replies are allowed. Empty = every moderation chat, any
+    # topic. Use topic: -1 to enable a whole chat, topic: 0 for the main area.
+    #   included_topics: [{chat: -100111, topic: -1}]
+    included_topics: []
+    excluded_topics: []
+    follow_up_only_same_user: false
+    reply_chain_depth: 5          # how many messages from the reply chain to include as dialog history
+    reply_chain_max_age_hours: 6   # stop walking the reply chain once a message is older than this many hours
+    reply_chain_adjacent_window: 0 # additional messages from chain participants whose message IDs fall within this window around chain messages (0 = disabled; age bounded by reply_chain_max_age_hours)
+    prompt:
+      system: |
+        Ты - участник русскоязычного Telegram чата по имени Геннадий.
+        Твоя задача - создать интересный, остроумный или полезный ответ на сообщение пользователя.
+        Ответ должен быть:
+        - На русском языке
+        - Уместным для общего чата
+        - Естественным, как будто отвечает обычный человек
+      user: |
+        Ответь на это сообщение: "{{message}}"
+
+        {{context}}
+
+  morning_greeting:
+    enabled: true
+    use_ai: true
+    use_full_model: true
+    time: "08:00"
+    # Where to post the greeting. Empty = every moderation chat with no topic.
+    # post_to:
+    #   - {chat: -100111, topic: 7}
+    #   - {chat: -100222}
+    post_to: []
+    prompt:
+      system: |
+        Ты - дружелюбный помощник в Telegram-чате русскоязычных жителей Чехии.
+        Твоя задача - создать утреннее приветствие для участников чата.
+        Приветствие должно быть:
+        - На русском языке
+        - Коротким (2-3 предложения)
+        - Не банальным
+        - Естественным, как от живого человека старым друзьям
+        - Уместным для общего чата
+      user: "Создай утреннее приветствие для чата. Сегодня {{weekday}} {{date}}{{weather}}{{holidays}}{{events}}"
+
+  daily_summary:
+    enabled: true
+    time: "02:00"
+    use_full_model: false
+    # Where to post the summary. Empty = every moderation chat with no topic.
+    # One summary is generated per distinct chat; listing the same chat with
+    # multiple topics re-posts the same text in each topic.
+    post_to: []
+    prompt:
+      system: |
+        Ты - аналитик русскоязычного Telegram чата жителей Чехии, тебя зовут Геннадий.
+        Твоя задача - создать сводку тем дня на основе сообщений участников чата за сегодня.
+
+        Требования к сводке:
+        - Подробная сводка (4-5 предложений)
+        - На русском языке
+        - Используй живой, разговорный стиль, без формальностей и сухого языка
+        - Перечисли основные темы и тезисы обсуждений
+        - Не упоминай имена конкретных участников чата
+        - Игнорируй свои собственные сообщения (кроме краткого содержания ссылок)
+
+        Формат: начни с "📊 Сводка дня:" и далее детальный анализ.
+      user: |
+        Проанализируй эти сообщения из чата за сегодня и создай краткую сводку дня:
+
+        {{messages}}
+
+  message_summaries:
+    enabled: true
+    use_full_model: false
+    light_model_threshold: 4096     # switch to light model if text exceeds this length (0 = disabled)
+    min_length: 1000
+    # Where long-message summaries run. Empty = every moderation chat, any topic.
+    included_topics: []
+    excluded_topics: []
+    excluded_user_ids: []
+    prompt:
+      system: "Ты - полезный помощник, который кратко излагает сообщения на русском языке."
+      user: |
+        Прочитай следующее сообщение и создай краткое содержание на 1-2 предложения
+        на русском языке. Будь конкретным и сохрани основную суть и ключевые моменты.
+
+        Сообщение:
+        {{message}}
+
+  link_summaries:
+    enabled: true
+    use_full_model: false
+    light_model_threshold: 8192     # switch to light model if text exceeds this length (0 = disabled)
+    excluded_domains: ["t.me", "telegram.org"]
+    excluded_extensions: [".pdf", ".doc*", ".xls*", ".ppt*", ".zip", ".rar", ".7z", ".tar", ".gz", ".exe", ".dmg", ".iso", ".mp3", ".mp4", ".avi", ".mkv", ".mov"]
+    excluded_user_ids: []
+    # Where link summaries run. Empty = every moderation chat, any topic.
+    included_topics: []
+    excluded_topics: []
+    extractor_api_key: "YOUR_EXTRACTOR_API_KEY_HERE"
+    diffbot_api_key: "YOUR_DIFFBOT_API_KEY_HERE"
+    # cloudflare_account_id: "YOUR_CF_ACCOUNT_ID"  # Cloudflare Browser Rendering (used as fallback before manual extraction)
+    # cloudflare_api_token: "YOUR_CF_API_TOKEN"     # API token with "Browser Rendering - Edit" permission
+    # cookies: "name1=value1; name2=value2"        # cookies sent with manual extraction requests (helps bypass consent walls)
+    # user_agent: "Mozilla/5.0 ..."                 # custom User-Agent for manual extraction requests
+    content_language: "ru"
+    max_extracted_content_length: 4096
+    max_download_size_bytes: 1048576  # 1 MB
+    min_summary_length: 0             # discard AI summaries shorter than this many characters (0 = disabled), treat as extraction failure
+    prompt:
+      system: "Ты - полезный помощник, который кратко излагает содержание веб-страниц, делая это на русском языке."
+      user: |
+        Прочитай содержание веб-страницы и создай краткое (живое, как будто пересказываешь другу)
+        содержание на 2-3 предложения - полностью на русском языке.
+        Сохрани основную суть и ключевые моменты.
+
+        Заголовок: {{title}}
+        URL: {{url}}
+
+        Содержание{{truncated_suffix}}:
+        {{content}}
+
+  # ── General Translation Prompt ──
+  # Used for translating extracted link content and Wikipedia events.
+  # RSS feeds will also use this prompt unless rss.translation_prompt is set.
+  # Variables: {{text}} - the text to translate
+  translation_prompt:
+    system: "Ты - профессиональный переводчик. Переведи текст точно и лаконично. Текст может начинаться с заголовка статьи на отдельной строке."
+    user: |
+      Переведи следующий текст на русский язык. Сохрани формат и структуру
+      (заголовок должен остаться на первой строке).
+
+      {{text}}
+
+  external_data:
+    weather_latitude: 50.088
+    weather_longitude: 14.4208
+    holidays_country: "CZ"
+    wikipedia_language: "cs"
+    translate_wikipedia: true  # translate Wikipedia events via AI (default: true)
+
+  rss:
+    use_full_model: true
+    light_model_threshold: 8192     # switch to light model if text exceeds this length (0 = disabled)
+    feeds:
+      - name: "Example Feed"
+        url: "https://example.com/rss"
+        time: "14:00"
+        enabled: true
+        translate: true          # false = publish original text instead of AI-translated
+        summarize_if_long: true  # when body exceeds max_message_length: true = AI summary, false = hard truncate
+        # Where to publish each item. Empty = every moderation chat, main area.
+        #   post_to: [{chat: -100111, topic: 7}]
+        #   post_to: [{chat: -100111, topic: 0}, {chat: -100222, topic: -1}]
+        post_to: []
+        max_message_length: 0    # truncate/summarize threshold in chars (0 = Telegram limit, 4096)
+
+    # ── RSS AI Prompts ──
+    # These prompts are used to translate and summarize RSS feed items.
+    # If translation_prompt is omitted, the generic ai.translation_prompt above is used.
+    # Variables: {{text}} - the RSS item content
+    translation_prompt:
+      system: |
+        You are a professional translator for news and legal texts.
+        Translate the text accurately and concisely, preserving structure and meaning.
+        The headline must remain on the first line.
+      user: |
+        Translate the following news text. Preserve the format and structure
+        (headline on the first line).
+
+        {{text}}
+
+    summary_prompt:
+      system: |
+        You are a helpful assistant that briefly summarizes news and legal texts.
+      user: |
+        Create a concise summary of the following news article in 7-8 sentences.
+        Preserve key facts and the essence.
+
+        {{text}}
+
+  # ── User Profiles ──
+  # Daily task that analyzes each active user's messages and builds/updates
+  # a short behavior profile with a reputation score (good / neutral / bad).
+  # The profile is then injected into content moderation prompts via {{user_profile}}.
+  # Variables for prompt:        {{username}}, {{messages}}
+  # Variables for update_prompt: {{username}}, {{messages}}, {{existing_profile}}
+  user_profiles:
+    enabled: false
+    time: "03:00"        # Daily run time (HH:MM) for the AI profile update task
+    skip_forever_muted_users: false  # don't build/update AI profiles for permanently muted users
+
+    # ── English prompts ──
+    prompt:
+      system: |
+        You are a behavioral analyst for a chat moderation system.
+        Based on the user's messages and their moderation history (warnings, mutes),
+        create a SHORT profile (2-3 sentences max) that describes:
+        1. What kind of person this is and what topics they discuss
+        2. Their communication style and manner
+        3. A reputation score: "good", "neutral", or "bad"
+
+        Rules:
+        - Be objective and concise
+        - "good" = constructive, helpful, respectful
+        - "neutral" = ordinary participant, no issues
+        - "bad" = rude, toxic, rule-violating, received warnings/mutes
+        - Always end with a separate line: "Reputation: good" or "Reputation: neutral" or "Reputation: bad"
+      user: |
+        Create a behavior profile for user @{{username}} based on their recent activity:
+
+        {{messages}}
+    update_prompt:
+      system: |
+        You are a behavioral analyst for a chat moderation system.
+        You are given an existing user profile and their new activity.
+        Update the profile to reflect the latest behavior.
+
+        Rules:
+        - Keep it SHORT (2-3 sentences max)
+        - Adjust the reputation score if the new evidence warrants it
+        - If the user improved, upgrade reputation; if they got worse, downgrade
+        - Preserve important historical context from the old profile
+        - Always end with a separate line: "Reputation: good" or "Reputation: neutral" or "Reputation: bad"
+      user: |
+        Update the profile for user @{{username}}.
+
+        Current profile:
+        {{existing_profile}}
+
+        New activity:
+        {{messages}}
+
+    # ── Russian prompts (alternative - uncomment to use) ──
+    # prompt:
+    #   system: |
+    #     Ты - аналитик поведения пользователей для системы модерации чата.
+    #     На основе сообщений пользователя и его истории модерации (предупреждения, муты),
+    #     создай КОРОТКИЙ профиль (2-3 предложения максимум), который описывает:
+    #     1. Что это за человек и какие темы он обсуждает
+    #     2. Его стиль и манера общения
+    #     3. Оценка репутации: "good", "neutral" или "bad"
+    #
+    #     Правила:
+    #     - Будь объективным и кратким
+    #     - "good" = конструктивный, полезный, уважительный
+    #     - "neutral" = обычный участник, без проблем
+    #     - "bad" = грубый, токсичный, нарушает правила, получал предупреждения/муты
+    #     - Всегда заканчивай отдельной строкой: "Reputation: good" или "Reputation: neutral" или "Reputation: bad"
+    #   user: |
+    #     Создай профиль поведения для пользователя @{{username}} на основе его недавней активности:
+    #
+    #     {{messages}}
+    # update_prompt:
+    #   system: |
+    #     Ты - аналитик поведения пользователей для системы модерации чата.
+    #     Тебе дан существующий профиль пользователя и его новая активность.
+    #     Обнови профиль с учётом последнего поведения.
+    #
+    #     Правила:
+    #     - Краткость (2-3 предложения максимум)
+    #     - Скорректируй оценку репутации, если новые данные это оправдывают
+    #     - Если пользователь стал лучше - повысь репутацию; если хуже - понизь
+    #     - Сохрани важный исторический контекст из старого профиля
+    #     - Всегда заканчивай отдельной строкой: "Reputation: good" или "Reputation: neutral" или "Reputation: bad"
+    #   user: |
+    #     Обнови профиль пользователя @{{username}}.
+    #
+    #     Текущий профиль:
+    #     {{existing_profile}}
+    #
+    #     Новая активность:
+    #     {{messages}}

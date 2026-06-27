@@ -1,0 +1,25 @@
+name: Check i18n & assets
+
+on:
+  push:
+    paths:
+      - 'internal/web/**'
+      - 'internal/bot/**'
+      - 'internal/i18n/**'
+  pull_request:
+    paths:
+      - 'internal/web/**'
+      - 'internal/bot/**'
+      - 'internal/i18n/**'
+  # Allow other workflows (e.g. the internal release pipeline) to reuse this
+  # check as a gate before publishing.
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check i18n, labels, and assets
+        run: bash .github/scripts/check_i18n.sh

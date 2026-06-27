@@ -1,0 +1,479 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (c) 2025 Kirill aka Noiseonwires */
+
+/* ── Config Form ── */
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    padding: .75rem 1rem;
+    background: var(--bg3);
+    border-radius: 0;
+    margin-bottom: .5rem;
+    user-select: none;
+}
+
+.section-header:hover {
+    background: var(--border);
+}
+
+.section-header h3 {
+    margin: 0;
+}
+
+.model-controls {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+}
+
+.reorder-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--fg2);
+    font-size: .7rem;
+    padding: .15rem .35rem;
+    cursor: pointer;
+    border-radius: 3px;
+    line-height: 1;
+}
+
+.reorder-btn:hover:not(:disabled) {
+    background: var(--border);
+    color: var(--fg);
+}
+
+.reorder-btn:disabled {
+    opacity: .3;
+    cursor: default;
+}
+
+.section-header .arrow {
+    transition: transform .2s;
+    font-size: .8rem;
+}
+
+.section-header.open .arrow {
+    transform: rotate(90deg);
+}
+
+.section-body {
+    padding: 0 .5rem .75rem;
+    display: none;
+}
+
+.section-body.open {
+    display: block;
+}
+
+.field {
+    margin-bottom: .9rem;
+}
+
+.env-override-badge {
+    font-size: .75rem;
+    color: var(--yellow, #e2b340);
+    margin-bottom: .2rem;
+}
+
+/* A field pinned by an environment variable: dim it and block pointer
+   interaction so it reads as locked. Controls also carry :disabled. */
+.field.env-locked > :not(.env-override-badge) {
+    opacity: .55;
+    pointer-events: none;
+}
+
+.field label {
+    display: block;
+    font-size: .88rem;
+    font-weight: 600;
+    margin-bottom: .25rem;
+}
+
+.field .desc {
+    font-size: .8rem;
+    color: var(--text2);
+    margin-bottom: .35rem;
+}
+
+.field input[type="text"],
+.field input[type="number"],
+.field input[type="password"],
+.field textarea {
+    width: 100%;
+    padding: .5rem .65rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.field textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+.field .placeholders {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .3rem;
+    margin-bottom: .4rem;
+}
+
+.field .placeholders .ph-badge {
+    display: inline-block;
+    font-size: .75rem;
+    padding: .1rem .45rem;
+    border-radius: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--accent2);
+    font-family: monospace;
+    cursor: pointer;
+}
+
+.field .placeholders .ph-badge:hover {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
+.field input[type="checkbox"] {
+    width: auto;
+    margin-right: .5rem;
+}
+
+.field .reveal-btn {
+    font-size: .75rem;
+    color: var(--accent2);
+    cursor: pointer;
+    margin-left: .5rem;
+}
+
+.save-btn {
+    padding: .55rem 1.5rem;
+    border: none;
+    border-radius: 0;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    transition: background .2s;
+}
+
+.save-btn:hover {
+    background: var(--accent2);
+}
+
+.save-btn:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+.save-msg {
+    display: inline-block;
+    margin-left: .75rem;
+    font-size: .88rem;
+    white-space: pre-wrap;
+    vertical-align: top;
+}
+
+.save-msg.ok {
+    color: var(--green);
+}
+
+.save-msg.err {
+    color: var(--red);
+}
+
+/* ── Diagnostics ── */
+.diag-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1rem;
+}
+
+.diag-card {
+    padding: 1rem;
+}
+
+.diag-card .svc-name {
+    font-weight: 700;
+    font-size: 1rem;
+    margin-bottom: .5rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.status-dot.ok {
+    background: var(--green);
+}
+
+.status-dot.err {
+    background: var(--red);
+}
+
+.status-dot.unknown {
+    background: var(--text2);
+}
+
+.status-dot.running {
+    background: var(--accent);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .4; }
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.upload-status {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    margin: .4rem 0 .8rem;
+    color: var(--accent2);
+    font-size: .9rem;
+}
+
+.upload-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent2);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+}
+
+.diag-detail {
+    font-size: .85rem;
+    color: var(--text2);
+    line-height: 1.6;
+}
+
+.test-btn {
+    margin-top: .6rem;
+    padding: .35rem .9rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--accent2);
+    font-size: .85rem;
+    transition: background .15s;
+}
+
+.test-btn:hover {
+    background: var(--bg3);
+}
+
+.test-btn:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+/* ── Files ── */
+.file-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+.file-card {
+    padding: 1.25rem;
+}
+
+.file-card h3 {
+    margin-bottom: .5rem;
+}
+
+.file-card p {
+    color: var(--text2);
+    font-size: .88rem;
+    margin-bottom: .75rem;
+}
+
+.file-card button {
+    margin-right: .5rem;
+    margin-bottom: .5rem;
+    padding: .5rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--text);
+    transition: background .15s;
+}
+
+.file-card button:hover {
+    background: var(--bg3);
+}
+
+.file-card input[type="file"] {
+    display: none;
+}
+
+/* ── Database clone (System tab) ── */
+.db-clone-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    margin-top: .75rem;
+}
+
+.db-clone-card button {
+    padding: .5rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--text);
+    transition: background .15s;
+}
+
+.db-clone-card button:hover:not(:disabled) {
+    background: var(--bg3);
+}
+
+.db-clone-card button:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+/* ── RSS ── */
+.rss-item {
+    border: 1px solid var(--border);
+    border-radius: 0;
+    padding: 1rem;
+    margin-bottom: .75rem;
+    background: var(--bg3);
+}
+
+.rss-item .rss-row {
+    display: flex;
+    gap: .75rem;
+    flex-wrap: wrap;
+    margin-bottom: .5rem;
+}
+
+.rss-item input {
+    flex: 1;
+    min-width: 150px;
+    padding: .4rem .5rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.rss-item label {
+    font-size: .85rem;
+    color: var(--text2);
+}
+
+/* Reusable (chat, topic) row used by ChatTopicList fields and the RSS feed
+ * target editor. Mirrors .rss-row layout but allows the chat dropdown to
+ * stretch and pins the controls on the right. */
+.chat-topic-row {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    margin-bottom: .4rem;
+    flex-wrap: wrap;
+}
+
+.chat-topic-row select {
+    flex: 1;
+    min-width: 220px;
+    padding: .35rem .45rem;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+}
+
+.rss-label {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    font-size: .85rem;
+    color: var(--text2);
+    white-space: nowrap;
+}
+
+.add-btn,
+.remove-btn {
+    padding: .35rem .75rem;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    font-size: .85rem;
+    transition: background .15s;
+}
+
+.add-btn {
+    color: var(--green);
+}
+
+.add-btn:hover {
+    background: rgba(0, 184, 148, .15);
+}
+
+.remove-btn {
+    color: var(--red);
+}
+
+.remove-btn:hover {
+    background: rgba(214, 48, 49, .15);
+}
+
+/* ── Stats ── */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: .75rem;
+}
+
+.stat-card {
+    background: var(--bg3);
+    border-radius: 0;
+    padding: 1rem;
+    text-align: center;
+}
+
+.stat-val {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--accent2);
+    overflow-wrap: break-word;
+    word-break: break-all;
+}
+
+.stat-val a {
+    font-size: 1rem;
+}
+
+.stat-label {
+    font-size: .82rem;
+    color: var(--text2);
+    margin-top: .25rem;
+}
+
+.stat-label a {
+    color: var(--text2);
+    text-decoration: underline;
+}
+
+.hidden {
+    display: none !important;
+}
+
