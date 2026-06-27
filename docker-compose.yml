@@ -1,0 +1,14 @@
+version: '3.8'
+
+name: gennadium
+
+services:
+  gennadium:
+    image: ghcr.io/noiseonwires/gennady:latest
+    container_name: gennadium
+    restart: unless-stopped
+
+    # Mount external directories
+    volumes:
+      - ./db:/app/db:rw       # Database
+      - ./config.yaml:/app/config.yaml:ro  # Bot configuration (read-only)
