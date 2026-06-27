@@ -83,7 +83,9 @@ desktop.ini
 /dist/
 
 # Service files
+# Ignore stray/local unit files, but keep the bot's own systemd unit.
 *.service
+!gennadium.service
 
 # Backup files
 *.bak
@@ -113,6 +115,3 @@ docker-compose.override.yml
 *.zip
 *.tar.gz
 *.rar
-
-# Application specific
-install.sh

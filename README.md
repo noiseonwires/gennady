@@ -7,7 +7,7 @@
 [![Build and Publish Docker Image](https://img.shields.io/github/actions/workflow/status/noiseonwires/gennady/docker-image.yml?branch=main&label=docker%20build)](https://github.com/noiseonwires/gennady/actions/workflows/docker-image.yml)
 [![Check i18n & assets](https://img.shields.io/github/actions/workflow/status/noiseonwires/gennady/check-i18n.yml?branch=main&label=i18n%20%26%20assets)](https://github.com/noiseonwires/gennady/actions/workflows/check-i18n.yml)
 [![Latest release](https://img.shields.io/github/v/release/noiseonwires/gennady?sort=semver)](https://github.com/noiseonwires/gennady/releases)
-[![Go version](https://img.shields.io/github/go-mod/go-version/noiseonwires/gennady)](go.mod)
+[![Go version](https://img.shields.io/github/go-mod/go-version/noiseonwires/gennady)](https://github.com/noiseonwires/gennady/blob/main/go.mod)
 [![Last commit](https://img.shields.io/github/last-commit/noiseonwires/gennady)](https://github.com/noiseonwires/gennady/commits/main)
 [![Issues](https://img.shields.io/github/issues/noiseonwires/gennady)](https://github.com/noiseonwires/gennady/issues)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
