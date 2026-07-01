@@ -24,6 +24,9 @@ func TestSetDefaults(t *testing.T) {
 	assert.NotZero(t, c.MessageDeletion.CleanupIntervalHours)
 	assert.Equal(t, 24, c.AI.ContentModeration.NewUserWindowHours)
 	assert.Equal(t, 500, c.AI.ContentModeration.ReplyContextMaxChars)
+	// Update-processing defaults: in-order single worker, stats on every 10 min.
+	assert.Equal(t, 1, c.UpdateProcessing.Workers)
+	assert.Equal(t, 600, c.UpdateProcessing.StatsIntervalSeconds)
 
 	// Remote auto-detection from URL + token.
 	c2 := &Config{}

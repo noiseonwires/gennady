@@ -79,6 +79,7 @@ var (
 	errAuthNoMethodConfigured     = webError{code: "auth.no_method_configured", msg: "no authentication method configured", status: http.StatusForbidden}
 	errAuthPasswordOrCodeRequired = webError{code: "auth.password_or_code_required", msg: "password or code required", status: http.StatusBadRequest}
 	errAuthOTPSendFailed          = webError{code: "auth.otp_send_failed", msg: "failed to send verification code", status: http.StatusInternalServerError}
+	errAuthTokenAndCodeRequired   = webError{code: "auth.token_and_code_required", msg: "login token and code required", status: http.StatusBadRequest}
 )
 
 // Config save / load / validate

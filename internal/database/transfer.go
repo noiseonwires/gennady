@@ -29,6 +29,7 @@ var transferTableNames = []string{
 	"user_daily_activity",
 	"token_usage",
 	"forum_topics",
+	"moderation_stats",
 }
 
 // transferExcludedTables lists tables that are intentionally NOT copied during
@@ -75,6 +76,10 @@ const (
 	// monotonic per source, so MAX is a safe upper bound and keeps re-imports
 	// idempotent (see mergeTokenUsageTx).
 	importMergeTokenUsage
+	// importMergeModerationStats merges moderation_stats by keeping the larger
+	// count on (stat, day_date) conflicts. Per-day counters are monotonic per
+	// source, so MAX is a safe upper bound and keeps re-imports idempotent.
+	importMergeModerationStats
 )
 
 // tableImportStrategy returns the import strategy for each table.
@@ -98,6 +103,8 @@ func tableImportStrategy(table string) importStrategy {
 		return importMergeUserProfiles
 	case "token_usage":
 		return importMergeTokenUsage
+	case "moderation_stats":
+		return importMergeModerationStats
 	default:
 		return importReplace // config_values, muted_users
 	}
@@ -235,6 +242,11 @@ func (db *DB) ImportFromLocalFile(localPath string, includeConfig bool) error {
 		case importMergeTokenUsage:
 			if err := mergeTokenUsageTx(localConn, tx); err != nil {
 				return fmt.Errorf("failed to merge token_usage: %w", err)
+			}
+
+		case importMergeModerationStats:
+			if err := mergeModerationStatsTx(localConn, tx); err != nil {
+				return fmt.Errorf("failed to merge moderation_stats: %w", err)
 			}
 		}
 	}
@@ -711,6 +723,39 @@ func mergeTokenUsageTx(src *sql.DB, tx *sql.Tx) error {
 		}
 		if _, err := stmt.Exec(model, service, day, inTok, outTok); err != nil {
 			return fmt.Errorf("upsert token usage (model=%s service=%s day=%s): %w", model, service, day, err)
+		}
+	}
+	return rows.Err()
+}
+
+// mergeModerationStatsTx merges moderation_stats rows from src into the
+// destination, keeping the larger count on (stat, day_date) conflicts. Per-day
+// counters are monotonic per source, so MAX is a safe upper bound and keeps
+// re-imports idempotent.
+func mergeModerationStatsTx(src *sql.DB, tx *sql.Tx) error {
+	rows, err := src.Query(`SELECT stat, day_date, count FROM moderation_stats`)
+	if err != nil {
+		return fmt.Errorf("select: %w", err)
+	}
+	defer rows.Close()
+
+	stmt, err := tx.Prepare(`INSERT INTO moderation_stats (stat, day_date, count)
+		VALUES (?, ?, ?)
+		ON CONFLICT(stat, day_date) DO UPDATE SET
+			count = MAX(count, excluded.count)`)
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	for rows.Next() {
+		var stat, day string
+		var count int64
+		if err := rows.Scan(&stat, &day, &count); err != nil {
+			return fmt.Errorf("scan: %w", err)
+		}
+		if _, err := stmt.Exec(stat, day, count); err != nil {
+			return fmt.Errorf("upsert moderation stat (stat=%s day=%s): %w", stat, day, err)
 		}
 	}
 	return rows.Err()

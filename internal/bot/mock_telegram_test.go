@@ -3,6 +3,8 @@
 package bot
 
 import (
+	"sync"
+
 	"gennadium/internal/telegram"
 )
 
@@ -20,6 +22,11 @@ type mockTelegram struct {
 	Answered       []string
 	Reactions      []reactionCall
 	WebhookDeletes int
+
+	// mu guards the recorded slices/counters so tests that drive async feature
+	// goroutines (summaries, link/creative replies) can observe calls without a
+	// data race. Synchronous tests may still read the exported fields directly.
+	mu sync.Mutex
 
 	// Optional hooks to control return values / inject errors.
 	SendFunc        func(p telegram.SendMessageParams) (telegram.Message, error)
@@ -43,20 +50,25 @@ type reactionCall struct {
 var _ telegram.Client = (*mockTelegram)(nil)
 
 func (m *mockTelegram) SendMessage(p telegram.SendMessageParams) (telegram.Message, error) {
+	m.mu.Lock()
 	m.SentMessages = append(m.SentMessages, p)
+	m.nextMessageID++
+	id := m.nextMessageID
+	m.mu.Unlock()
 	if m.SendFunc != nil {
 		return m.SendFunc(p)
 	}
-	m.nextMessageID++
 	return telegram.Message{
-		MessageID: m.nextMessageID,
+		MessageID: id,
 		Chat:      telegram.Chat{ID: p.ChatID},
 		Text:      p.Text,
 	}, nil
 }
 
 func (m *mockTelegram) EditMessageText(p telegram.EditMessageTextParams) (telegram.Message, error) {
+	m.mu.Lock()
 	m.EditedTexts = append(m.EditedTexts, p)
+	m.mu.Unlock()
 	if m.EditFunc != nil {
 		return m.EditFunc(p)
 	}
@@ -64,12 +76,16 @@ func (m *mockTelegram) EditMessageText(p telegram.EditMessageTextParams) (telegr
 }
 
 func (m *mockTelegram) EditMessageReplyMarkup(p telegram.EditMessageReplyMarkupParams) (telegram.Message, error) {
+	m.mu.Lock()
 	m.EditedMarkups = append(m.EditedMarkups, p)
+	m.mu.Unlock()
 	return telegram.Message{MessageID: p.MessageID, Chat: telegram.Chat{ID: p.ChatID}}, nil
 }
 
 func (m *mockTelegram) DeleteMessage(chatID int64, messageID int) error {
+	m.mu.Lock()
 	m.DeletedIDs = append(m.DeletedIDs, [2]int64{chatID, int64(messageID)})
+	m.mu.Unlock()
 	if m.DeleteFunc != nil {
 		return m.DeleteFunc(chatID, messageID)
 	}
@@ -77,7 +93,9 @@ func (m *mockTelegram) DeleteMessage(chatID int64, messageID int) error {
 }
 
 func (m *mockTelegram) RestrictChatMember(p telegram.RestrictChatMemberParams) error {
+	m.mu.Lock()
 	m.Restrictions = append(m.Restrictions, p)
+	m.mu.Unlock()
 	if m.RestrictFunc != nil {
 		return m.RestrictFunc(p)
 	}
@@ -85,22 +103,30 @@ func (m *mockTelegram) RestrictChatMember(p telegram.RestrictChatMemberParams) e
 }
 
 func (m *mockTelegram) BanChatMember(chatID, userID int64) error {
+	m.mu.Lock()
 	m.Bans = append(m.Bans, [2]int64{chatID, userID})
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *mockTelegram) UnbanChatMember(chatID, userID int64, onlyIfBanned bool) error {
+	m.mu.Lock()
 	m.Unbans = append(m.Unbans, [2]int64{chatID, userID})
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *mockTelegram) AnswerCallback(callbackQueryID, text string) error {
+	m.mu.Lock()
 	m.Answered = append(m.Answered, callbackQueryID)
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *mockTelegram) SetMessageReaction(chatID int64, messageID int, emoji string) error {
+	m.mu.Lock()
 	m.Reactions = append(m.Reactions, reactionCall{ChatID: chatID, MessageID: messageID, Emoji: emoji})
+	m.mu.Unlock()
 	return nil
 }
 
@@ -144,6 +170,24 @@ func (m *mockTelegram) GetUserProfilePhotos(userID int64, limit int) (telegram.U
 }
 
 func (m *mockTelegram) DeleteWebhook(dropPending bool) error {
+	m.mu.Lock()
 	m.WebhookDeletes++
+	m.mu.Unlock()
 	return nil
+}
+
+// sentCount returns the number of recorded SendMessage calls under the lock,
+// for use in async tests (require.Eventually / require.Never).
+func (m *mockTelegram) sentCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.SentMessages)
+}
+
+// sentMessagesCopy returns a snapshot of the recorded SendMessage calls under
+// the lock, for content assertions in async tests.
+func (m *mockTelegram) sentMessagesCopy() []telegram.SendMessageParams {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]telegram.SendMessageParams(nil), m.SentMessages...)
 }

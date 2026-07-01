@@ -243,6 +243,36 @@ func TestTokenUsage(t *testing.T) {
 	assert.Equal(t, int64(110), stats[0].TotalInput)
 }
 
+func TestModerationStats(t *testing.T) {
+	db := newTestDB(t)
+	today := "2026-06-29"
+	yesterday := "2026-06-28"
+	dayBefore := "2026-06-27"
+
+	require.NoError(t, db.IncrementModerationStat(ModStatReceived, today, 1))
+	require.NoError(t, db.IncrementModerationStat(ModStatReceived, today, 4))
+	require.NoError(t, db.IncrementModerationStat(ModStatReceived, yesterday, 3))
+	require.NoError(t, db.IncrementModerationStat(ModStatLightFlagged, today, 2))
+	require.NoError(t, db.IncrementModerationStat(ModStatManualAction, dayBefore, 1))
+	// Non-positive delta is ignored.
+	require.NoError(t, db.IncrementModerationStat(ModStatReceived, today, 0))
+
+	rows, err := db.GetModerationStats(today, yesterday, dayBefore)
+	require.NoError(t, err)
+
+	byStat := map[string]ModerationStatBuckets{}
+	for _, r := range rows {
+		byStat[r.Stat] = r
+	}
+	require.Len(t, rows, 6)
+	assert.Equal(t, int64(5), byStat[ModStatReceived].Today)
+	assert.Equal(t, int64(3), byStat[ModStatReceived].Yesterday)
+	assert.Equal(t, int64(8), byStat[ModStatReceived].AllTime)
+	assert.Equal(t, int64(2), byStat[ModStatLightFlagged].Today)
+	assert.Equal(t, int64(1), byStat[ModStatManualAction].DayBefore)
+	assert.Equal(t, int64(0), byStat[ModStatFullConfirmed].AllTime)
+}
+
 func TestUserProfiles(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.UpsertUserProfile(&UserProfile{

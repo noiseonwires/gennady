@@ -553,16 +553,47 @@ func (b *Bot) analyzeUserProfileText(userID int64, text string) string {
 	if !strings.Contains(p.User, "{{profile_text}}") {
 		userPrompt = strings.TrimSpace(userPrompt + "\n\n" + text)
 	}
-	resp, err := b.callAzureOpenAIWithConfig("new_user_profile_check", userPrompt, p.System, b.config.AI.LightModel.Get(0), 200, false)
+	modelConfig := b.config.AI.LightModel.Get(0)
+	if b.config.AI.ContentModeration.NewUserProfileUseFullModel {
+		modelConfig = b.config.AI.FullModel.Get(0)
+	}
+	resp, err := b.callAzureOpenAIWithConfig("new_user_profile_check", userPrompt, p.System, modelConfig, 200, false)
 	if err != nil {
 		log.Printf("New-user profile check: AI analysis error for user %d: %v", userID, err)
 		return ""
 	}
 	verdict := strings.TrimSpace(resp)
-	if verdict == "" || strings.EqualFold(strings.TrimRight(verdict, "."), "CLEAN") {
+	if isCleanProfileVerdict(verdict) {
 		return ""
 	}
 	return i18n.Tf("profile.screening_flagged", verdict)
+}
+
+// isCleanProfileVerdict reports whether a new-user profile verdict means
+// "nothing concerning". The prompt asks the model to reply with exactly CLEAN,
+// but smaller models often answer in natural language ("nothing suspicious",
+// "ничего подозрительного не найдено"). Treat those as clean too so we never
+// post a flag whose only content says nothing was found.
+func isCleanProfileVerdict(verdict string) bool {
+	v := strings.ToLower(strings.TrimSpace(verdict))
+	if v == "" {
+		return true
+	}
+	// Strip surrounding punctuation/quotes so "CLEAN." / "«clean»" still match.
+	v = strings.Trim(v, " \t\r\n.,:;!?\"'«»()")
+	if v == "clean" {
+		return true
+	}
+	cleanPhrases := []string{
+		"nothing suspicious", "nothing concerning", "no issues", "no concerns",
+		"ничего подозрительного", "не найдено", "не обнаружено", "всё чисто", "все чисто",
+	}
+	for _, p := range cleanPhrases {
+		if strings.Contains(v, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // recordUserProfileFinding stores the new-member screening findings in the

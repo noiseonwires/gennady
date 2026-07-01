@@ -87,11 +87,64 @@ func TestAnalyzeUserProfileText_Clean(t *testing.T) {
 	assert.Equal(t, "", finding)
 }
 
+func TestAnalyzeUserProfileText_CleanNaturalLanguage(t *testing.T) {
+	for _, resp := range []string{
+		"подозрительного не найдено",
+		"Ничего подозрительного не обнаружено.",
+		"Nothing suspicious found",
+		"CLEAN.",
+	} {
+		b, _ := newProfileScreeningBot(t, resp)
+		finding := b.analyzeUserProfileText(7, "Bio: just a regular person")
+		assert.Equal(t, "", finding, "verdict %q must be treated as clean", resp)
+	}
+}
+
 func TestAnalyzeUserProfileText_Unconfigured(t *testing.T) {
 	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {})
 	b.config.AI.ContentModeration.NewUserProfilePrompt = config.PromptPair{}
 	finding := b.analyzeUserProfileText(7, "anything")
 	assert.Equal(t, "", finding)
+}
+
+// The screening judges the profile text with the light model by default and the
+// full model when new_user_profile_use_full_model is set. The two models get
+// distinct deployment names, and the Azure request path encodes the deployment,
+// so the recorded request reveals which model actually ran.
+func TestAnalyzeUserProfileText_ModelSelection(t *testing.T) {
+	newBot := func(t *testing.T) (*Bot, *redirectTransport) {
+		b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"CLEAN"}}]}`))
+		})
+		b.config.AI.Enabled = true
+		b.config.AI.LightModel = config.AIModelConfigs{Configs: []config.AIModelConfig{{
+			Endpoint: "https://azure.example.com", APIKey: "key", DeploymentName: "light-dep",
+		}}}
+		b.config.AI.FullModel = config.AIModelConfigs{Configs: []config.AIModelConfig{{
+			Endpoint: "https://azure.example.com", APIKey: "key", DeploymentName: "full-dep",
+		}}}
+		b.config.AI.ContentModeration.NewUserProfileCheckEnabled = true
+		b.config.AI.ContentModeration.NewUserProfilePrompt = config.PromptPair{
+			System: "screen this profile",
+			User:   "profile: {{profile_text}}",
+		}
+		return b, rt
+	}
+
+	t.Run("light model by default", func(t *testing.T) {
+		b, rt := newBot(t)
+		b.analyzeUserProfileText(7, "Bio: hello")
+		require.NotNil(t, rt.last())
+		assert.Contains(t, rt.last().Path, "light-dep")
+	})
+
+	t.Run("full model when enabled", func(t *testing.T) {
+		b, rt := newBot(t)
+		b.config.AI.ContentModeration.NewUserProfileUseFullModel = true
+		b.analyzeUserProfileText(7, "Bio: hello")
+		require.NotNil(t, rt.last())
+		assert.Contains(t, rt.last().Path, "full-dep")
+	})
 }
 
 // --- checkFirstMessageUserProfile (end-to-end via mock + transport) -----------

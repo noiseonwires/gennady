@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -100,11 +101,37 @@ func (h *apiHandler) handleGetTokenUsage(w http.ResponseWriter, r *http.Request)
 		rows = []database.TokenUsageStat{}
 	}
 
+	if rows == nil {
+		rows = []database.TokenUsageStat{}
+	}
+
 	jsonResponse(w, map[string]interface{}{
 		"day":      today,
 		"rows":     rows,
 		"services": groups,
 		"totals":   grand,
+	})
+}
+
+// handleGetModerationStats returns the moderation funnel counters (received,
+// light-flagged, full-confirmed, auto-actioned, manually cleared, manually
+// actioned) for today / yesterday / the day before / all time. The day keys
+// use the server's local timezone so they line up with how the bot records.
+func (h *apiHandler) handleGetModerationStats(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	dayBefore := now.AddDate(0, 0, -2).Format("2006-01-02")
+	rows, err := h.db.GetModerationStats(today, yesterday, dayBefore)
+	if err != nil {
+		writeWebErrf(w, errGetTableStatsFailed, "failed to get moderation stats: %v", err)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"today":      today,
+		"yesterday":  yesterday,
+		"day_before": dayBefore,
+		"rows":       rows,
 	})
 }
 
@@ -182,7 +209,45 @@ func (h *apiHandler) handleGetDiagnostics(w http.ResponseWriter, r *http.Request
 		"bunny_env":        bunnyEnv,
 		"chats":            chats,
 		"uptime_seconds":   int(time.Since(h.startedAt).Seconds()),
+		"moderator_ui":     h.moderatorUIInfo(),
 	})
+}
+
+// moderatorUIInfo summarises how the isolated moderator web UI is reachable:
+// its mounted path prefix and the effective public base URL used to build
+// one-time login links (web_ui.public_url, falling back to the webhook host).
+// Surfaced on the diagnostics page so the super-admin can verify the link the
+// "Access Web UI" button will hand out.
+func (h *apiHandler) moderatorUIInfo() map[string]interface{} {
+	publicURL, source := h.effectivePublicURL()
+	available := h.moderatorPathPrefix != "" && publicURL != ""
+	loginURL := ""
+	if available {
+		loginURL = publicURL + h.moderatorPathPrefix + "/"
+	}
+	return map[string]interface{}{
+		"available":         available,
+		"public_url":        publicURL,
+		"public_url_source": source, // "config" | "webhook" | ""
+		"path_prefix":       h.moderatorPathPrefix,
+		"url":               loginURL,
+	}
+}
+
+// effectivePublicURL resolves the externally-reachable base URL (scheme + host,
+// no path) used to build moderator login links: web_ui.public_url, falling back
+// to the scheme+host of webhook.url. Returns ("", "") when none is resolvable.
+// Mirrors the bot-side resolver that actually builds the links.
+func (h *apiHandler) effectivePublicURL() (base, source string) {
+	if u := strings.TrimRight(strings.TrimSpace(h.config.WebUI.PublicURL), "/"); u != "" {
+		return u, "config"
+	}
+	if wu := strings.TrimSpace(h.config.Webhook.URL); wu != "" {
+		if parsed, err := url.Parse(wu); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			return parsed.Scheme + "://" + parsed.Host, "webhook"
+		}
+	}
+	return "", ""
 }
 
 // handleGetWebhookInfo fetches the current webhook status from Telegram API.

@@ -172,6 +172,52 @@ func TestUpdateMessageInfoAndExtra(t *testing.T) {
 	assert.Equal(t, "summary", got.ExtraInfo)
 }
 
+// TestReRecordPreservesAnnotations guards against the regression where a
+// duplicate Telegram delivery re-records an already-tracked message and blanks
+// the annotation columns (moderation_reason, reactions, extra_info) that were
+// written by a separate pass. RecordIncomingMessage / StoreMessageInfo upsert
+// the volatile content but must leave those annotations intact.
+func TestReRecordPreservesAnnotations(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now()
+
+	// First delivery records the message, then later passes annotate it.
+	_, err := db.RecordIncomingMessage(&MessageInfo{
+		MessageID: 42, ChatID: -100, UserID: 5, Username: "u",
+		Text: "spam complaint", Timestamp: now,
+	}, IncomingMessageOpts{})
+	require.NoError(t, err)
+	require.NoError(t, db.UpdateMessageModerationReason(42, -100, "flagged as spam"))
+	_, err = db.StoreMessageReactions(42, -100, `{"👍":2}`)
+	require.NoError(t, err)
+	require.NoError(t, db.UpdateMessageExtraInfo(42, -100, "ocr text"))
+
+	// Duplicate delivery of the same (message_id, chat_id) re-records it with a
+	// freshly-built MessageInfo carrying empty annotations.
+	_, err = db.RecordIncomingMessage(&MessageInfo{
+		MessageID: 42, ChatID: -100, UserID: 5, Username: "u",
+		Text: "spam complaint", Timestamp: now,
+	}, IncomingMessageOpts{})
+	require.NoError(t, err)
+
+	got, err := db.GetMessageInfo(42, -100)
+	require.NoError(t, err)
+	assert.Equal(t, "flagged as spam", got.ModerationReason, "re-record must not wipe moderation_reason")
+	assert.Equal(t, `{"👍":2}`, got.Reactions, "re-record must not wipe reactions")
+	assert.Equal(t, "ocr text", got.ExtraInfo, "re-record must not wipe extra_info")
+
+	// StoreMessageInfo (bot-message path) must preserve them on re-store too.
+	require.NoError(t, db.StoreMessageInfo(&MessageInfo{
+		MessageID: 42, ChatID: -100, UserID: 5, Username: "u",
+		Text: "spam complaint", Timestamp: now,
+	}))
+	got, err = db.GetMessageInfo(42, -100)
+	require.NoError(t, err)
+	assert.Equal(t, "flagged as spam", got.ModerationReason)
+	assert.Equal(t, `{"👍":2}`, got.Reactions)
+	assert.Equal(t, "ocr text", got.ExtraInfo)
+}
+
 func TestMessageThreadIDRoundTrip(t *testing.T) {
 	db := newTestDB(t)
 	now := time.Now()

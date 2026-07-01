@@ -51,19 +51,33 @@ document.addEventListener('alpine:init', () => {
     /* ── Auth Store ── */
     Alpine.store('auth', {
         loggedIn: false,
-        step: 'loading',  // 'loading', 'password', 'otp', 'request_otp'
+        step: 'loading',  // 'loading', 'password', 'otp', 'request_otp', 'mod_otp', 'mod_no_token'
         passwordRequired: true,
         otpAvailable: false,
+        moderator: false,   // true when served under the limited moderator prefix
+        modToken: '',       // one-time login token read from the URL fragment
         password: '',
         otpCode: '',
         loginError: '',
 
         clearSession() {
             this.loggedIn = false;
-            this.step = this.passwordRequired ? 'password' : (this.otpAvailable ? 'request_otp' : 'password');
+            if (this.moderator) {
+                this.step = this.modToken ? 'mod_otp' : 'mod_no_token';
+            } else {
+                this.step = this.passwordRequired ? 'password' : (this.otpAvailable ? 'request_otp' : 'password');
+            }
             this.password = '';
             this.otpCode = '';
             localStorage.removeItem('token');
+        },
+
+        // _readModToken extracts the one-time login token from the URL fragment
+        // (e.g. "#t=abc123"). Using the fragment keeps the token out of the
+        // server request line / access logs.
+        _readModToken() {
+            const raw = (location.hash || '').replace(/^#/, '');
+            try { return (new URLSearchParams(raw).get('t') || '').trim(); } catch { return ''; }
         },
 
         async fetchMode() {
@@ -71,6 +85,14 @@ document.addEventListener('alpine:init', () => {
                 const r = await fetch(BASE + '/api/auth/mode', { credentials: 'same-origin' });
                 if (r.ok) {
                     const d = await r.json();
+                    if (d.moderator) {
+                        this.moderator = true;
+                        if (!this.loggedIn) {
+                            this.modToken = this._readModToken();
+                            this.step = this.modToken ? 'mod_otp' : 'mod_no_token';
+                        }
+                        return;
+                    }
                     this.passwordRequired = d.password_required;
                     this.otpAvailable = d.otp_available;
                 }
@@ -145,6 +167,35 @@ document.addEventListener('alpine:init', () => {
             this.loginError = '';
         },
 
+        // submitModOTP completes the moderator one-time login: the link token
+        // (from the URL fragment) plus the OTP are posted together. On success
+        // the token is stripped from the address bar so it isn't retained in
+        // browser history.
+        async submitModOTP() {
+            const code = this.otpCode.trim();
+            if (!code || !this.modToken) return;
+            try {
+                const r = await fetch(BASE + '/api/auth/mod-login', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: this.modToken, code })
+                });
+                const d = await r.json();
+                if (r.ok && d.authenticated) {
+                    this.loginError = '';
+                    this.modToken = '';
+                    try { history.replaceState(null, '', location.pathname + location.search); } catch {}
+                    this.loggedIn = true;
+                    Alpine.store('app').init();
+                } else {
+                    this.loginError = Alpine.store('i18n').err(d) || 'Invalid code';
+                }
+            } catch {
+                this.loginError = 'Network error';
+            }
+        },
+
         async requestOTP() {
             this.loginError = '';
             try {
@@ -186,6 +237,7 @@ document.addEventListener('alpine:init', () => {
         page: 'moderation',
         sidebarOpen: false,
         version: {},
+        role: 'super',   // 'super' | 'moderator'; set from /api/version
         configMeta: {},
         configData: {},
         envOverrides: new Set(),
@@ -209,6 +261,24 @@ document.addEventListener('alpine:init', () => {
             { page: 'system',      icon: '🗄️', i18nKey: 'nav_system' },
         ],
 
+        // isModerator is the single source of truth for role-based UI gating
+        // (hidden nav items, read-only diagnostics). The server independently
+        // enforces the same boundary: the moderator prefix simply doesn't mount
+        // config / logs / system / test / debug endpoints.
+        get isModerator() {
+            return this.role === 'moderator';
+        },
+
+        // visibleNavItems is the role-filtered navigation. Moderators only see
+        // moderation, messages, profiles and the read-only diagnostics page.
+        get visibleNavItems() {
+            if (this.isModerator) {
+                const allowed = ['moderation', 'messages', 'profiles', 'diagnostics'];
+                return this.navItems.filter(n => allowed.includes(n.page));
+            }
+            return this.navItems;
+        },
+
         get versionLabel() {
             const v = this.version;
             const short = v.git_commit ? v.git_commit.substring(0, 7) : '';
@@ -216,9 +286,10 @@ document.addEventListener('alpine:init', () => {
         },
 
         // Valid page ids, derived from navItems. Used by the hash router to
-        // reject unknown / out-of-range location.hash fragments.
+        // reject unknown / out-of-range location.hash fragments. Role-filtered
+        // so a moderator can't deep-link to a gated page.
         get pageIds() {
-            return this.navItems.map(n => n.page);
+            return this.visibleNavItems.map(n => n.page);
         },
 
         // ── Hash-based router ──
@@ -313,12 +384,23 @@ document.addEventListener('alpine:init', () => {
         },
 
         async init() {
+            // Resolve the role first so navItems/pageIds are filtered before the
+            // router parses the hash, and so we skip the config-meta load (and
+            // its gated endpoints) for moderators.
+            await this.loadVersion();
             this.setupRouter();
-            await Promise.all([this.loadVersion(), this.loadConfigMeta()]);
+            if (this.isModerator) {
+                this.loadChats();
+            } else {
+                await this.loadConfigMeta();
+            }
         },
 
         async loadVersion() {
-            try { this.version = await apiJSON('/api/version'); } catch {}
+            try {
+                this.version = await apiJSON('/api/version');
+                if (this.version && this.version.role) this.role = this.version.role;
+            } catch {}
         },
 
         async loadConfigMeta() {

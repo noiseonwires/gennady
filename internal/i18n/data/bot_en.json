@@ -23,7 +23,9 @@
   "btn.view_actions": "📋 View recent actions",
   "btn.top10": "🏆 TOP-10 violators (24h)",
   "btn.punish": "⚖️ Punish (Report a message)",
+  "btn.stats": "📊 Moderation stats",
   "btn.web_otp": "🌐 Web UI — access code",
+  "btn.access_web_ui": "🛡️ Access Web UI",
   "btn.about": "ℹ️ About bot",
   "btn.back": "🔙 Back",
   "btn.back_to_menu": "⬅️ Back to menu",
@@ -34,6 +36,15 @@
 
   "menu.admin_title": "Admin Menu",
   "menu.admin_text": "🤖 %s - Admin Menu\n\nChoose an option:",
+
+  "stats.title": "📊 *Moderation funnel*\n_(today / yesterday / day before / all time; % of previous stage)_\n",
+  "stats.received": "📥 Received: %s",
+  "stats.light": "🔍 Light-flagged: %s",
+  "stats.full": "🤖 Full-confirmed: %s",
+  "stats.auto": "⚡ Auto-actions: %s",
+  "stats.cleared": "✅ Manually cleared: %s",
+  "stats.manual": "⚖️ Manual actions: %s",
+  "stats.empty": "📊 No moderation activity recorded yet.",
 
   "mod.violation_info": "📊 Last 7d: ⚠️ %d warnings | 🔇 %d mutes | 📋 %d total actions",
   "mod.user_new": "🆕 NEW USER: this author's first message was seen within the new-user window — apply extra scrutiny to first-time posters.",
@@ -139,8 +150,14 @@
   "webui.otp_text": "🔐 *Web UI access code*\n\n```\n%s\n```\n\n⏰ Valid for 5 minutes\n🔗 Open Web UI and enter this code",
   "webui.otp_failed": "❌ Failed to send code",
   "webui.otp_sent": "✅ Code sent to private messages",
+  "webui.mod_link_text": "🛡️ <b>Moderator Web UI access</b>\n\n🔗 Open this one-time link:\n%s\n\n⏰ Valid for 5 minutes. The link works once. Enter the code from the next message.",
+  "webui.mod_otp_text": "🔑 <b>Moderator Web UI code</b>\n\n<code>%s</code>\n\n⏰ Valid for 5 minutes. Enter it after opening the link from the previous message.",
+  "webui.mod_link_sent": "✅ Login link and code sent to private messages",
+  "webui.mod_no_public_url": "⚠️ web_ui.public_url is not configured",
+  "webui.mod_dm_required": "⚠️ Open a private chat with me and press Start, then tap Access Web UI again.",
+  "webui.mod_not_allowed": "⛔ Admins only",
 
-  "startup.notify": "🚀 @%s is up and running\n\nVersion: %s\nBuilt: %s",
+  "startup.notify": "🚀 `@%s` is up and running",
   "db.connection_lost": "🔴 Database connection lost\n\n%s\n\nReconnecting…",
   "db.connection_recovered": "🟢 Database connection recovered",
 

@@ -78,6 +78,10 @@ func TestIsBotMentioned(t *testing.T) {
 	}
 	assert.True(t, b.isBotMentioned(msgE))
 
+	// Caption mention (photos/media carry their text in Caption, with no entities).
+	msgCap := &tgbotapi.Message{Chat: tgbotapi.Chat{ID: -100, Type: "supergroup"}, Caption: "@thebot угомонись"}
+	assert.True(t, b.isBotMentioned(msgCap))
+
 	// No mention.
 	assert.False(t, b.isBotMentioned(&tgbotapi.Message{Chat: tgbotapi.Chat{ID: -100, Type: "supergroup"}, Text: "no mention here"}))
 }

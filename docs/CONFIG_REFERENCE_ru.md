@@ -112,6 +112,13 @@
 | `webhook.secret_token` | `WEBHOOK_SECRET_TOKEN` | string 🔒 | Секретный токен - Секретный токен для валидации вебхуков |
 | `webhook.url` | `WEBHOOK_URL` | string | URL - Публичный HTTPS URL вебхука |
 
+## Обработка обновлений
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `update_processing.workers` | `UPDATE_PROCESSING_WORKERS` | int | Воркеры - Число параллельных воркеров обработки обновлений (только режим длинного опроса). По умолчанию 1 = обработка по порядку; увеличьте, чтобы запускать несколько конвейеров модерации одновременно, когда обновления накапливаются |
+| `update_processing.stats_interval_seconds` | `UPDATE_PROCESSING_STATS_INTERVAL_SECONDS` | int | Интервал статистики, сек - Как часто логировать загрузку пула воркеров, чтобы решить, менять ли число воркеров (по умолчанию 600; отрицательное значение отключает) |
+
 ## Веб-интерфейс
 
 | Ключ YAML | ENV | Тип | Описание |
@@ -120,6 +127,8 @@
 | `web_ui.path_prefix` | `WEB_UI_PATH_PREFIX` | string | Префикс пути - Префикс URL-пути для веб-интерфейса (по умолч.: /admin) |
 | `web_ui.password` | `WEB_UI_PASSWORD` | string 🔒 | Пароль - Пароль для аутентификации в веб-интерфейсе. В YAML можно хранить открытый пароль; конфиг в БД сохраняет его как hashed:pbkdf2-sha256:... |
 | `web_ui.otp_enabled` | `WEB_UI_OTP_ENABLED` | bool | OTP включён - Включить одноразовый пароль (TOTP) для входа в веб-интерфейс (по умолчанию: true) |
+| `web_ui.moderator_path_prefix` | `WEB_UI_MODERATOR_PATH_PREFIX` | string | Префикс пути модератора - Префикс URL-пути для изолированного ограниченного веб-интерфейса модератора (по умолч.: /mod; должен отличаться от path_prefix) |
+| `web_ui.public_url` | `WEB_UI_PUBLIC_URL` | string | Публичный URL - Внешне доступный базовый URL без префикса пути (напр. https://bot.example.com) для ссылок входа модератора; при пустом значении берётся хост из URL вебхука |
 
 ## ИИ (общее)
 
@@ -147,10 +156,12 @@
 | `ai.content_moderation.content_safety_endpoint` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_ENDPOINT` | string | Content Safety эндпоинт - URL эндпоинта Azure Content Safety API |
 | `ai.content_moderation.content_safety_api_key` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_API_KEY` | string 🔒 | Content Safety API-ключ - API-ключ для Azure Content Safety |
 | `ai.content_moderation.new_user_profile_check_enabled` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_CHECK_ENABLED` | bool | Проверка профиля нового участника - При первом сообщении нового пользователя анализировать весь его публичный профиль (имя, био, фото профиля и привязанный личный канал: название/описание/фото) через AI и анализ изображений (Content Safety → Vision → OCR.space), добавляя отметку в профиль при срабатывании. Работает без Content Safety. |
+| `ai.content_moderation.new_user_profile_use_full_model` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_USE_FULL_MODEL` | bool | Проверка профиля: полная модель - Оценивать собранный текст профиля полной моделью вместо лёгкой. Лучше распознаёт неочевидные признаки спама/скама/рекламы, но каждый вызов дороже. Влияет только на текстовый вердикт AI; проверка фото не меняется. По умолчанию: выкл (лёгкая модель). |
 | `ai.content_moderation.new_user_profile_prompt.system` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_PROMPT_SYSTEM` | string | Проверка профиля нового участника (системный) - Системный промпт для анализа имени, био, фото и личного канала нового участника |
 | `ai.content_moderation.new_user_profile_prompt.user` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_PROMPT_USER` | string | Проверка профиля нового участника (пользовательский) - Пользовательский промпт для анализа профиля нового участника (плейсхолдеры: `{{profile_text}}`) |
 | `ai.content_moderation.new_user_window_hours` | `AI_CONTENT_MODERATION_NEW_USER_WINDOW_HOURS` | int | Окно нового пользователя (часы) - Сколько часов после первого замеченного сообщения пользователь считается «новым». Для новых пользователей добавляется отметка в контекст модерации и подставляется плейсхолдер {{new_user_rules}} (по умолчанию: 24). |
 | `ai.content_moderation.new_user_rules` | `AI_CONTENT_MODERATION_NEW_USER_RULES` | string | Правила для новых пользователей - Дополнительный текст правил, подставляемый в плейсхолдер {{new_user_rules}} промпта модерации только для сообщений новых пользователей (см. Окно нового пользователя). Пусто - плейсхолдер раскрывается в пустую строку. |
+| `ai.content_moderation.full_model_first_messages` | `AI_CONTENT_MODERATION_FULL_MODEL_FIRST_MESSAGES` | int | Полная модель для первых сообщений - Перепроверять первые N сообщений пользователя полной моделью, даже если лёгкая модель ничего не нашла, чтобы поймать неочевидный спам новых участников. Считается отдельно по каждому пользователю и чату. 0 - отключено. |
 | `ai.content_moderation.reply_context_max_chars` | `AI_CONTENT_MODERATION_REPLY_CONTEXT_MAX_CHARS` | int | Макс. длина контекста ответа - Максимальная длина (в символах) цитируемого текста «в ответ на», подставляемого в плейсхолдер {{reply_to}} промпта модерации. Более длинные цитаты обрезаются с многоточием (без разрыва символа). 0 - без ограничения (по умолчанию: 500). |
 | `ai.content_moderation.ocrspace_enabled` | `AI_CONTENT_MODERATION_OCRSPACE_ENABLED` | bool | OCR.space включён - Включить облачный API OCR.space (https://ocr.space/ocrapi) для извлечения текста из изображений |
 | `ai.content_moderation.ocrspace_api_key` | `AI_CONTENT_MODERATION_OCRSPACE_API_KEY` | string 🔒 | Ключ API OCR.space - Ключ API OCR.space (есть бесплатный тариф; тестовый ключ: helloworld) |

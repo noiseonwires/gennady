@@ -159,14 +159,36 @@ echo "=== Check 5: External script URLs ==="
 
 external_scripts=$(grep -oP '<script[^>]+src="(https?://[^"]+)"' "$INDEX_HTML" | sed 's/.*src="\(.*\)"/\1/')
 
+# Transient network blips (DNS, CDN edge, runner egress) occasionally yield
+# HTTP 000. Retry with an incremental (doubling) backoff before declaring a URL
+# unreachable. The pause grows 5s → 10s → 20s → … and is capped at 1 minute.
+EXT_URL_ATTEMPTS=6
+EXT_URL_PAUSE=5        # initial pause; doubles after each failed attempt
+EXT_URL_PAUSE_MAX=60  # cap the incremental backoff at 1 minute
+
 ext_count=0
 for url in $external_scripts; do
     ext_count=$((ext_count + 1))
-    status=$(curl -o /dev/null -s -w '%{http_code}' -L --max-time 10 "$url" || true)
+    status=000
+    pause=$EXT_URL_PAUSE
+    for attempt in $(seq 1 "$EXT_URL_ATTEMPTS"); do
+        status=$(curl -o /dev/null -s -w '%{http_code}' -L --max-time 15 "$url" || true)
+        if [ "$status" -ge 200 ] 2>/dev/null && [ "$status" -lt 400 ] 2>/dev/null; then
+            break
+        fi
+        if [ "$attempt" -lt "$EXT_URL_ATTEMPTS" ]; then
+            echo "  retry $attempt/$EXT_URL_ATTEMPTS for $url (HTTP $status), waiting ${pause}s…"
+            sleep "$pause"
+            pause=$((pause * 2))
+            if [ "$pause" -gt "$EXT_URL_PAUSE_MAX" ]; then
+                pause=$EXT_URL_PAUSE_MAX
+            fi
+        fi
+    done
     if [ "$status" -ge 200 ] 2>/dev/null && [ "$status" -lt 400 ] 2>/dev/null; then
         echo "  OK ($status): $url"
     else
-        fail "external script unreachable (HTTP $status): $url"
+        fail "external script unreachable after $EXT_URL_ATTEMPTS attempts (HTTP $status): $url"
     fi
 done
 

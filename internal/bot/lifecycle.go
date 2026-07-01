@@ -57,6 +57,10 @@ func (b *Bot) Start() {
 	go b.startScheduledTasks()
 	go b.startDBHealthMonitor()
 
+	if iv := b.config.UpdateProcessing.StatsIntervalSeconds; iv > 0 {
+		go b.startWorkerStatsLogger(time.Duration(iv) * time.Second)
+	}
+
 	if b.config.Webhook.Enabled {
 		b.startWebhookMode()
 	} else {
@@ -68,22 +72,39 @@ func (b *Bot) Start() {
 }
 
 // notifySuperAdminStartup sends a one-off "bot is up" DM to the super-admin when
-// admin.notify_startup is enabled and a super-admin user id is configured. It's
-// best-effort: a send failure is logged, never fatal, so it can't block startup.
+// admin.notify_startup is enabled and a super-admin user id is configured. The DM
+// mirrors the "about bot" menu (version/commit/build/license) and appends any
+// BunnyNet deployment info, so the super-admin gets the full picture on restart.
+// It's best-effort: a send failure is logged, never fatal, so it can't block startup.
 func (b *Bot) notifySuperAdminStartup() {
-	b.notifySuperAdmin(i18n.Tf("startup.notify", b.botSelf.Username, b.version, b.buildTime))
+	text := i18n.Tf("startup.notify", b.botSelf.Username)
+	text += "\n\n" + b.buildAboutText() + buildBunnyNetSection()
+	b.notifySuperAdminMarkdown(text)
 }
 
-// notifySuperAdmin DMs an operational notice to the super-admin, gated by
+// notifySuperAdmin DMs a plain-text operational notice to the super-admin, gated by
 // admin.notify_startup and the presence of a configured super-admin user id.
 // Best-effort: send failures are logged, never fatal.
 func (b *Bot) notifySuperAdmin(text string) {
+	b.sendSuperAdminNotice(text, "")
+}
+
+// notifySuperAdminMarkdown is like notifySuperAdmin but renders the message with
+// Markdown formatting (used for rich notices such as the startup/about summary).
+func (b *Bot) notifySuperAdminMarkdown(text string) {
+	b.sendSuperAdminNotice(text, telegram.ParseModeMarkdown)
+}
+
+// sendSuperAdminNotice is the shared best-effort DM path for super-admin notices,
+// gated by admin.notify_startup and a configured super-admin user id.
+func (b *Bot) sendSuperAdminNotice(text string, parseMode telegram.ParseMode) {
 	if !b.config.Admin.NotifyStartup || b.config.Admin.SuperAdminUserID == 0 {
 		return
 	}
 	if _, err := b.tg.SendMessage(telegram.SendMessageParams{
 		ChatID:                b.config.Admin.SuperAdminUserID,
 		Text:                  text,
+		ParseMode:             parseMode,
 		DisableWebPagePreview: true,
 	}); err != nil {
 		log.Printf("Failed to send super-admin notification: %v", err)
@@ -181,6 +202,9 @@ func (b *Bot) maybeForceGC() {
 
 // processUpdate handles a single incoming update regardless of how it was received.
 func (b *Bot) processUpdate(update telegram.Update) {
+	start := b.metrics.begin()
+	defer b.metrics.end(start)
+
 	b.debugf("TG update received: update_id=%d type=%s", update.UpdateID, describeUpdateType(update))
 
 	switch {

@@ -38,7 +38,7 @@ admin:
   super_admin_user_id: 0
   notify_super_admin: false        # also send moderation alerts to super-admin DM
   notify_startup: false            # DM the super-admin on start/restart and remote-DB connection loss/recovery
-  whitelist_user_ids: []
+  whitelist_user_ids: [777000]     # users who bypass filters; 777000 = Telegram service account (channel posts / service notifications) — keep it here to avoid moderating those
 
 # ─── Moderation ──────────────────────────────────────────────────────
 # ── Topic scope model (used by every (chat, topic) list below) ──
@@ -111,12 +111,23 @@ webhook:
   secret_token: ""          # optional shared secret validated on each webhook request
   url: "https://bot.example.com/webhook"
 
+# ─── Update processing (inbound update concurrency) ─────────────────
+# Handlers run synchronously inside each worker, so the moderation decision
+# (recording + the AI moderation call) blocks the worker until it finishes; the
+# slower side features (link/creative/message summaries) already run in their own
+# background goroutine. Raise workers if a busy chat makes updates back up.
+update_processing:
+  workers: 1                     # concurrent update-processing workers (long-polling only; webhook mode is already per-request)
+  stats_interval_seconds: 600    # log worker-pool utilization this often so you know when to change `workers` (negative = off)
+
 # ─── Web UI (admin panel) ───────────────────────────────────────────
 web_ui:
   enabled: false
-  path_prefix: "/admin"   # URL path prefix for the web UI
+  path_prefix: "/admin"   # URL path prefix for the super-admin web UI
   password: ""             # Admin panel password (leave empty to disable auth)
   otp_enabled: true        # Require OTP via Telegram as 2FA (needs super_admin_user_id set)
+  moderator_path_prefix: "/mod"  # URL path prefix for the isolated, limited moderator web UI (must differ from path_prefix)
+  public_url: ""           # Externally-reachable base URL without path prefix (e.g. https://bot.example.com) for moderator login links; falls back to the webhook URL host when empty
 
 # ─── User Profiles (general tracking, not AI) ────────────────────────
 # When enabled, the bot records per-user data on every message in moderation chats:
@@ -242,11 +253,17 @@ ai:
     # is unavailable or fails; all the gathered text is judged by the AI prompt
     # below. Findings are added to their profile before AI moderation runs.
     # One-shot per user per chat. Works without content_safety_enabled.
+    # NOTE: the prompt MUST tell the model to reply with exactly CLEAN for good
+    # profiles; any other reply is recorded as a finding. Drop that instruction
+    # and clean profiles get flagged ("flagged: nothing suspicious found").
     new_user_profile_check_enabled: false
+    # Judge the gathered profile text with the FULL model instead of the light
+    # model. The full model spots subtle spam/scam/promo cues in a profile's
+    # name, bio and channel text more reliably, at a higher per-call cost. Only
+    # affects the AI text verdict; photo screening still uses Content Safety /
+    # Vision / OCR.space. Defaults to false (light model).
+    new_user_profile_use_full_model: false
     new_user_profile_prompt:
-      system: |
-        You are a moderation assistant screening a new chat member's public profile.
-        You are given their name, bio and a description of their profile photo, and,
         if present, the name, description and photo of their linked personal channel.
         Identify signals of spam, scams, paid promotion, adult/NSFW content, hate
         speech, or other policy-violating intent. Reply with a single short line. If
@@ -267,6 +284,13 @@ ai:
     # nothing until you configure it. Example: stricter link/promo rules for
     # first-time posters.
     new_user_rules: ""
+    # Double-check a user's first N messages in a moderation chat with the full
+    # model even when the light model found nothing. Moderation normally runs the
+    # cheap light model first and only escalates to the full model when the light
+    # model flags something; this catches subtle spam from brand-new members that
+    # the light model may miss, at the cost of one extra full-model call for each
+    # of a user's first N messages. Counted per user per chat. 0 (default) disables.
+    full_model_first_messages: 0
     # Max length (in UTF-8 characters, not bytes) of the quoted "in reply to"
     # text injected into the moderation prompt's {{reply_to}} placeholder.
     # Longer parent/quoted messages are truncated with an ellipsis (truncation

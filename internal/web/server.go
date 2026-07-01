@@ -33,6 +33,7 @@ type WebServer struct {
 	diagnostics            *DiagnosticsTracker
 	handler                *apiHandler
 	pathPrefix             string
+	moderatorPrefix        string
 	scheduledEventsTrigger ScheduledEventsTrigger
 }
 
@@ -48,28 +49,44 @@ func NewWebServer(cfg *config.Config, db *database.DB, diagnostics *DiagnosticsT
 	}
 	prefix = strings.TrimRight(prefix, "/")
 
+	modPrefix := cfg.WebUI.ModeratorPathPrefix
+	if modPrefix == "" {
+		modPrefix = "/mod"
+	}
+	modPrefix = strings.TrimRight(modPrefix, "/")
+	// Never let the moderator surface collide with the super-admin surface; if
+	// misconfigured to the same prefix, disable the moderator UI rather than
+	// shadowing the full UI with the reduced route set.
+	if modPrefix == prefix {
+		log.Printf("⚠️  web_ui.moderator_path_prefix (%q) must differ from path_prefix; moderator UI disabled", modPrefix)
+		modPrefix = ""
+	}
+
 	h := &apiHandler{
-		config:       cfg,
-		configFile:   configFile,
-		configFromDB: configFromDB,
-		db:           db,
-		auth:         auth,
-		pathPrefix:   prefix,
-		diagnostics:  diagnostics,
-		startedAt:    time.Now(),
+		config:              cfg,
+		configFile:          configFile,
+		configFromDB:        configFromDB,
+		db:                  db,
+		auth:                auth,
+		pathPrefix:          prefix,
+		moderatorPathPrefix: modPrefix,
+		diagnostics:         diagnostics,
+		startedAt:           time.Now(),
 	}
 
 	ws := &WebServer{
-		Mux:         mux,
-		config:      cfg,
-		db:          db,
-		auth:        auth,
-		diagnostics: diagnostics,
-		handler:     h,
-		pathPrefix:  prefix,
+		Mux:             mux,
+		config:          cfg,
+		db:              db,
+		auth:            auth,
+		diagnostics:     diagnostics,
+		handler:         h,
+		pathPrefix:      prefix,
+		moderatorPrefix: modPrefix,
 	}
 
 	ws.registerRoutes()
+	ws.registerModeratorRoutes()
 	return ws
 }
 
@@ -161,6 +178,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.Mux.HandleFunc(p+"/api/muted", ws.requireAuth(ws.handler.handleGetMutedUsers))
 	ws.Mux.HandleFunc(p+"/api/stats", ws.requireAuth(ws.handler.handleGetDBStats))
 	ws.Mux.HandleFunc(p+"/api/tokens", ws.requireAuth(ws.handler.handleGetTokenUsage))
+	ws.Mux.HandleFunc(p+"/api/modstats", ws.requireAuth(ws.handler.handleGetModerationStats))
 	ws.Mux.HandleFunc(p+"/api/messages", ws.requireAuth(ws.handler.handleGetMessages))
 	ws.Mux.HandleFunc(p+"/api/messages/delete", ws.requireAuth(ws.handler.handleDeleteMessage))
 	ws.Mux.HandleFunc(p+"/api/moderation/mute", ws.requireAuth(ws.handler.handleModerationMute))
@@ -192,14 +210,35 @@ func (ws *WebServer) registerRoutes() {
 	ws.Mux.HandleFunc(p+"/api/files/db/clone-to-remote", ws.requireAuth(ws.handler.handleCloneLocalToRemote))
 
 	// Static files (SPA)
+	ws.Mux.HandleFunc(p+"/", ws.staticHandler(p))
+
+	log.Printf("🌐 Web UI registered at %s/", p)
+}
+
+// staticHandler serves the embedded SPA under the given path prefix, falling
+// back to index.html for client-side routes. The same bundle is served under
+// both the super-admin and moderator prefixes; the SPA adapts to its mount
+// point (BASE = location.pathname) and to the caller's role.
+func (ws *WebServer) staticHandler(prefix string) http.HandlerFunc {
 	staticFS, _ := fs.Sub(staticFiles, "static")
-	ws.Mux.HandleFunc(p+"/", func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		// Strip the path prefix for the file server
-		trimmed := strings.TrimPrefix(r.URL.Path, p)
+		trimmed := strings.TrimPrefix(r.URL.Path, prefix)
 		if trimmed == "" || trimmed == "/" {
 			trimmed = "index.html"
 		} else {
 			trimmed = strings.TrimPrefix(trimmed, "/")
+		}
+
+		// Unknown API paths must 404 rather than fall back to the SPA: an
+		// endpoint that isn't registered under this prefix (e.g. config/logs
+		// under the moderator prefix) should never return 200/HTML, which would
+		// blur the line between "no such endpoint" and "endpoint exists". The
+		// SPA only ever calls registered endpoints and uses hash-based client
+		// routing, so it never relies on /api/* falling through to index.html.
+		if strings.HasPrefix(trimmed, "api/") {
+			http.NotFound(w, r)
+			return
 		}
 
 		// Try to open the requested file; fall back to index.html for SPA routing
@@ -230,9 +269,57 @@ func (ws *WebServer) registerRoutes() {
 		}
 
 		http.ServeContent(w, r, trimmed, stat.ModTime(), f.(io.ReadSeeker))
-	})
+	}
+}
 
-	log.Printf("🌐 Web UI registered at %s/", p)
+// registerModeratorRoutes registers the isolated, limited moderator web UI
+// under its own path prefix. Only the endpoints a moderator legitimately needs
+// are mounted here — configuration, logs, system/restart, file/DB and all
+// test/debug endpoints are deliberately NOT registered, so they return 404 for
+// the moderator surface by construction (defence in depth on top of the
+// session role check). The static SPA is served under the moderator prefix as
+// well and adapts itself to the moderator role.
+func (ws *WebServer) registerModeratorRoutes() {
+	mp := ws.moderatorPrefix
+	if mp == "" {
+		return
+	}
+
+	// Auth + bootstrap (no session required)
+	ws.Mux.HandleFunc(mp+"/api/auth/mod-login", ws.handler.handleModeratorLogin)
+	ws.Mux.HandleFunc(mp+"/api/auth/mode", ws.handler.handleModeratorAuthMode)
+	ws.Mux.HandleFunc(mp+"/api/i18n", ws.handler.handleGetI18n)
+
+	// Protected (moderator session required)
+	ws.Mux.HandleFunc(mp+"/api/auth/check", ws.requireModAuth(ws.handler.handleAuthCheck))
+	ws.Mux.HandleFunc(mp+"/api/auth/logout", ws.requireModAuth(ws.handler.handleLogout))
+	ws.Mux.HandleFunc(mp+"/api/version", ws.requireModAuth(ws.handler.handleGetVersion))
+
+	// Moderation data + actions
+	ws.Mux.HandleFunc(mp+"/api/actions", ws.requireModAuth(ws.handler.handleGetActions))
+	ws.Mux.HandleFunc(mp+"/api/muted", ws.requireModAuth(ws.handler.handleGetMutedUsers))
+	ws.Mux.HandleFunc(mp+"/api/modstats", ws.requireModAuth(ws.handler.handleGetModerationStats))
+	ws.Mux.HandleFunc(mp+"/api/tokens", ws.requireModAuth(ws.handler.handleGetTokenUsage))
+	ws.Mux.HandleFunc(mp+"/api/messages", ws.requireModAuth(ws.handler.handleGetMessages))
+	ws.Mux.HandleFunc(mp+"/api/messages/delete", ws.requireModAuth(ws.handler.handleDeleteMessage))
+	ws.Mux.HandleFunc(mp+"/api/moderation/mute", ws.requireModAuth(ws.handler.handleModerationMute))
+	ws.Mux.HandleFunc(mp+"/api/moderation/unmute", ws.requireModAuth(ws.handler.handleModerationUnmute))
+	ws.Mux.HandleFunc(mp+"/api/moderation/warn", ws.requireModAuth(ws.handler.handleModerationWarn))
+	ws.Mux.HandleFunc(mp+"/api/moderation/delete-messages", ws.requireModAuth(ws.handler.handleModerationDeleteMessages))
+	ws.Mux.HandleFunc(mp+"/api/moderation/delete-message", ws.requireModAuth(ws.handler.handleModerationDeleteMessage))
+	ws.Mux.HandleFunc(mp+"/api/moderation/remoderate", ws.requireModAuth(ws.handler.handleModerationRemoderate))
+	ws.Mux.HandleFunc(mp+"/api/profiles", ws.requireModAuth(ws.handler.handleGetProfiles))
+	ws.Mux.HandleFunc(mp+"/api/profiles/delete", ws.requireModAuth(ws.handler.handleDeleteProfile))
+	ws.Mux.HandleFunc(mp+"/api/chats", ws.requireModAuth(ws.handler.handleListChats))
+
+	// Read-only diagnostics (no test/debug endpoints under the moderator prefix)
+	ws.Mux.HandleFunc(mp+"/api/diagnostics", ws.requireModAuth(ws.handler.handleGetDiagnostics))
+	ws.Mux.HandleFunc(mp+"/api/diagnostics/webhook", ws.requireModAuth(ws.handler.handleGetWebhookInfo))
+
+	// Static files (SPA)
+	ws.Mux.HandleFunc(mp+"/", ws.staticHandler(mp))
+
+	log.Printf("🛡️  Moderator Web UI registered at %s/", mp)
 }
 
 // registerScheduledEventsWebhook registers the webhook trigger endpoint for scheduled events.
@@ -267,8 +354,27 @@ func (ws *WebServer) registerScheduledEventsWebhook() {
 	log.Printf("⏰ Scheduled events webhook registered at %s", path)
 }
 
-// requireAuth wraps a handler with session validation.
+// requireAuth wraps a handler with session validation. It accepts only
+// super-admin sessions: a moderator-scoped token is rejected here even if it is
+// somehow presented to a super-admin endpoint (e.g. via a forged cookie path or
+// a Bearer header), so the limited moderator role can never reach the full
+// admin surface.
 func (ws *WebServer) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := extractSessionToken(r)
+		if token == "" || sessionRole(token) != RoleSuper || !ws.auth.ValidateSession(token) {
+			writeWebErr(w, errUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requireModAuth wraps a handler exposed under the moderator prefix. It accepts
+// any valid session (a super-admin token is a strict superset of moderator
+// privileges); in practice only moderator cookies reach this surface because
+// the cookie Path is scoped to the moderator prefix.
+func (ws *WebServer) requireModAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := extractSessionToken(r)
 		if token == "" || !ws.auth.ValidateSession(token) {

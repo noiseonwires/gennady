@@ -18,6 +18,30 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe` can derive the dev version.
+          fetch-depth: 0
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # Tagged build: use the tag without a leading 'v'.
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            # Untagged dev build: <last-tag>-<commits-since>-dev (e.g. 1.0.2-5-dev).
+            LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+            if [ -n "${LAST_TAG}" ]; then
+              COMMITS="$(git rev-list "${LAST_TAG}..HEAD" --count)"
+              VERSION="${LAST_TAG#v}-${COMMITS}-dev"
+            else
+              COMMITS="$(git rev-list HEAD --count)"
+              VERSION="0.0.0-${COMMITS}-dev"
+            fi
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION}"
 
       # Buildx provides multi-platform build; no QEMU step needed
       - name: Set up Buildx
@@ -67,7 +91,7 @@ jobs:
             GO_VERSION=1.26.3
             GIT_COMMIT=${{ steps.build_meta.outputs.SHORT_SHA }}
             BUILD_TIME=${{ steps.build_meta.outputs.BUILD_TIME }}
-            VERSION=${{ steps.meta.outputs.version || 'dev' }}
+            VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Scan image (Trivy)

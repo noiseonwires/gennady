@@ -118,6 +118,7 @@ func (b *Bot) applyCruelMute(query *tgbotapi.CallbackQuery, chatID int64, messag
 	if err := b.db.LogAction(action); err != nil {
 		log.Printf("Error logging cruel-mute action: %v", err)
 	}
+	b.recordManualModStat(int64(query.From.ID), "cmute")
 
 	return muteUntil, username, nil
 }

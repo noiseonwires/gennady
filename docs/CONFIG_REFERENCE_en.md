@@ -112,6 +112,13 @@ This file is auto-generated. Do not edit manually.
 | `webhook.secret_token` | `WEBHOOK_SECRET_TOKEN` | string 🔒 | Secret Token - Secret token for webhook validation |
 | `webhook.url` | `WEBHOOK_URL` | string | URL - Public HTTPS URL of the webhook |
 
+## Update Processing
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `update_processing.workers` | `UPDATE_PROCESSING_WORKERS` | int | Workers - Number of concurrent update-processing workers (long-polling mode only). Default 1 = in-order processing; raise to run several moderation pipelines at once when updates back up |
+| `update_processing.stats_interval_seconds` | `UPDATE_PROCESSING_STATS_INTERVAL_SECONDS` | int | Stats Interval Seconds - How often to log worker-pool utilization so you can decide whether to change Workers (default 600; negative disables) |
+
 ## Web UI
 
 | YAML Key | ENV | Type | Description |
@@ -120,6 +127,8 @@ This file is auto-generated. Do not edit manually.
 | `web_ui.path_prefix` | `WEB_UI_PATH_PREFIX` | string | Path Prefix - URL path prefix for the web UI (default: /admin) |
 | `web_ui.password` | `WEB_UI_PASSWORD` | string 🔒 | Password - Password for web UI authentication. Plaintext is accepted in YAML; DB-backed config stores it as hashed:pbkdf2-sha256:... |
 | `web_ui.otp_enabled` | `WEB_UI_OTP_ENABLED` | bool | OTP Enabled - Enable one-time password (TOTP) for web UI login (default: true) |
+| `web_ui.moderator_path_prefix` | `WEB_UI_MODERATOR_PATH_PREFIX` | string | Moderator Path Prefix - URL path prefix for the isolated, limited moderator web UI (default: /mod; must differ from path_prefix) |
+| `web_ui.public_url` | `WEB_UI_PUBLIC_URL` | string | Public URL - Externally-reachable base URL without path prefix (e.g. https://bot.example.com) for moderator login links; falls back to the webhook URL host when empty |
 
 ## AI General
 
@@ -147,10 +156,12 @@ This file is auto-generated. Do not edit manually.
 | `ai.content_moderation.content_safety_endpoint` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_ENDPOINT` | string | Content Safety Endpoint - Azure Content Safety API endpoint URL |
 | `ai.content_moderation.content_safety_api_key` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_API_KEY` | string 🔒 | Content Safety API Key - API key for Azure Content Safety |
 | `ai.content_moderation.new_user_profile_check_enabled` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_CHECK_ENABLED` | bool | New Member Profile Check - On a new user's first message, screen their whole public profile (name, bio, profile photo, and linked personal channel name/description/photo) with AI and image analysis (Content Safety → Vision → OCR.space), adding a notice to their profile if flagged. Works without Content Safety. |
+| `ai.content_moderation.new_user_profile_use_full_model` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_USE_FULL_MODEL` | bool | Profile Check: Use Full Model - Judge the gathered profile text with the full model instead of the light model. Better at spotting subtle spam/scam/promo cues, at a higher per-call cost. Only affects the AI text verdict; photo screening is unchanged. Default: off (light model). |
 | `ai.content_moderation.new_user_profile_prompt.system` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_PROMPT_SYSTEM` | string | New Member Profile Check (System) - System prompt for screening a new member's name, bio, photo and personal channel |
 | `ai.content_moderation.new_user_profile_prompt.user` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_PROMPT_USER` | string | New Member Profile Check (User) - User prompt for screening a new member's profile (placeholders: `{{profile_text}}`) |
 | `ai.content_moderation.new_user_window_hours` | `AI_CONTENT_MODERATION_NEW_USER_WINDOW_HOURS` | int | New-User Window (hours) - How long after a user's first observed message they count as 'new'. New users get a marker in the moderation context and trigger the {{new_user_rules}} placeholder (default: 24). |
 | `ai.content_moderation.new_user_rules` | `AI_CONTENT_MODERATION_NEW_USER_RULES` | string | New-User Rules - Extra rules text injected into the {{new_user_rules}} moderation-prompt placeholder, only for messages from new users (see New-User Window). Empty = the placeholder expands to nothing. |
+| `ai.content_moderation.full_model_first_messages` | `AI_CONTENT_MODERATION_FULL_MODEL_FIRST_MESSAGES` | int | Full-Model First Messages - Double-check a user's first N messages with the full model even when the light model found nothing, to catch subtle spam from new members. Counted per user per chat. 0 = disabled. |
 | `ai.content_moderation.reply_context_max_chars` | `AI_CONTENT_MODERATION_REPLY_CONTEXT_MAX_CHARS` | int | Reply Context Max Chars - Max length (in characters) of the quoted 'in reply to' text injected into the moderation {{reply_to}} placeholder. Longer quotes are truncated with an ellipsis (never splits a character). 0 = no limit (default: 500). |
 | `ai.content_moderation.ocrspace_enabled` | `AI_CONTENT_MODERATION_OCRSPACE_ENABLED` | bool | OCR.space Enabled - Enable the OCR.space cloud API (https://ocr.space/ocrapi) for text extraction from images |
 | `ai.content_moderation.ocrspace_api_key` | `AI_CONTENT_MODERATION_OCRSPACE_API_KEY` | string 🔒 | OCR.space API Key - API key for OCR.space (free tier available; test key: helloworld) |

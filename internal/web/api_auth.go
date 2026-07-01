@@ -25,6 +25,11 @@ func (h *apiHandler) handleGetVersion(w http.ResponseWriter, r *http.Request) {
 		"bot_name":      h.botName,
 		"author":        h.botAuthor,
 		"license":       h.botLicense,
+		// role lets the SPA tailor itself to the caller's privileges. It is
+		// derived from the validated session token presented on this request,
+		// so it cannot be spoofed by the client. Reflects RoleSuper for the
+		// super-admin UI and RoleModerator for the isolated moderator UI.
+		"role": sessionRole(extractSessionToken(r)),
 	})
 }
 
@@ -35,6 +40,52 @@ func (h *apiHandler) handleAuthMode(w http.ResponseWriter, r *http.Request) {
 		"password_required": passwordRequired,
 		"otp_available":     otpAvailable,
 	})
+}
+
+// handleModeratorAuthMode is the unauthenticated bootstrap for the moderator
+// UI. It tells the SPA to use the one-time link + OTP login flow rather than
+// the super-admin password/OTP flow.
+func (h *apiHandler) handleModeratorAuthMode(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, map[string]interface{}{
+		"moderator": true,
+	})
+}
+
+// handleModeratorLogin completes a one-time moderator login. The client posts
+// the link token (read from the URL fragment, so it never reaches the server
+// logs as part of the path/query) together with the OTP delivered over
+// Telegram. On success a moderator-scoped session cookie is issued.
+func (h *apiHandler) handleModeratorLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeWebErr(w, errMethodNotAllowed)
+		return
+	}
+
+	req, err := decodeJSONLimited[struct {
+		Token string `json:"token"`
+		Code  string `json:"code"`
+	}](r, 4<<10)
+	if err != nil {
+		respondDecodeError(w, err)
+		return
+	}
+
+	token := strings.TrimSpace(req.Token)
+	code := strings.TrimSpace(req.Code)
+	if token == "" || code == "" {
+		writeWebErr(w, errAuthTokenAndCodeRequired)
+		return
+	}
+
+	ip := extractIP(r)
+	sessionToken, err := h.auth.ValidateModeratorLogin(token, code, ip)
+	if err != nil {
+		writeWebErrFromErr(w, err)
+		return
+	}
+
+	setSessionCookie(w, r, h.moderatorPathPrefix, sessionToken)
+	jsonResponse(w, map[string]interface{}{"authenticated": true})
 }
 
 func (h *apiHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -129,10 +180,16 @@ func (h *apiHandler) sendLoginOTP(w http.ResponseWriter) {
 
 func (h *apiHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	token := extractSessionToken(r)
+	prefix := h.pathPrefix
 	if token != "" {
 		h.auth.Logout(token)
+		// Clear the cookie under the same path it was issued for, otherwise the
+		// browser keeps a stale moderator cookie scoped to the /mod prefix.
+		if sessionRole(token) == RoleModerator {
+			prefix = h.moderatorPathPrefix
+		}
 	}
-	clearSessionCookie(w, r, h.pathPrefix)
+	clearSessionCookie(w, r, prefix)
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
 

@@ -443,6 +443,17 @@ func (db *DB) createTables() error {
 			output_tokens INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (model, service, day_date)
 		)`,
+		// Per-day moderation funnel counters (one row per stat/day). Tracks how
+		// many messages were received, flagged by the light model, confirmed by
+		// the full model, auto-actioned, manually cleared, or manually actioned.
+		// Daily figures come from the row whose day_date matches the day key;
+		// all-time figures are summed across all rows for a stat.
+		`CREATE TABLE IF NOT EXISTS moderation_stats (
+			stat TEXT NOT NULL,
+			day_date TEXT NOT NULL,
+			count INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (stat, day_date)
+		)`,
 		// Human-readable forum-topic names, harvested from forum_topic_created /
 		// forum_topic_edited service messages. The Bot API has no method to query
 		// a topic name by id or list topics, so names are learned passively and

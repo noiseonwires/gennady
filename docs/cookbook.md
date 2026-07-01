@@ -305,6 +305,12 @@ The prompt receives everything the bot collected - name, username, bio, profile-
 description, channel name/description and channel-photo description - via `{{profile_text}}`.
 Reply **`CLEAN`** to record nothing; any other reply becomes a finding on the user's profile.
 
+> ⚠️ **Keep the `CLEAN` convention.** If you customize the prompt, it must still tell the model
+> to answer exactly `CLEAN` for good profiles. Otherwise a clean reply phrased in prose ("nothing
+> suspicious found") is treated as a finding and posted as a flag - producing nonsense like
+> "profile flagged: nothing suspicious found". The bot recognizes `CLEAN` and a few common
+> "nothing found" phrases, but a single decisive keyword is far more reliable.
+
 ### The unified `suspicious-profile` marker
 
 Whenever the check fires (a flagged photo, or the AI judging the profile suspicious), the bot
@@ -539,6 +545,11 @@ message_summaries:
 - `skip_admin_users` - exempt chat admins specifically (note: in the reference config this is
   `false`, i.e. admins *are* moderated).
 - Per-feature `excluded_user_ids` / `excluded_topics` - scope a single feature.
+
+> 💡 **Keep `777000` in `whitelist_user_ids`.** It is Telegram's own service account: it
+> posts the linked channel's messages into a discussion group and delivers service
+> notifications. Whitelisting it stops the bot from moderating those automated posts. It ships
+> in the default config for this reason.
 
 ---
 

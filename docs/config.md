@@ -225,7 +225,7 @@ admin:
   super_admin_user_id: 123456789 # your Telegram user ID (silent commands, OTP, debug DMs)
   notify_super_admin: false      # also DM moderation alerts to the super-admin
   notify_startup: false          # DM the super-admin on start/restart and remote-DB connection loss/recovery
-  whitelist_user_ids: []         # users who bypass filters and have admin access
+  whitelist_user_ids: [777000]   # users who bypass filters and have admin access; 777000 = Telegram service account (keep it whitelisted)
 
 moderation:
   chat_id: -1009876543210        # single ID, or a list: [-100111, -100222]
@@ -324,6 +324,8 @@ web_ui:
   path_prefix: "/admin"          # URL prefix - change to a custom value (see note below)
   password: ""                   # admin password or hashed:pbkdf2-sha256:... (empty = disabled)
   otp_enabled: true              # require Telegram OTP as 2FA (needs super_admin_user_id)
+  moderator_path_prefix: "/mod"  # URL prefix for the isolated, limited moderator UI (must differ from path_prefix)
+  public_url: ""                 # base URL without prefix (https://bot.example.com); falls back to the webhook host when empty
 ```
 
 When config is stored in the database, `web_ui.password` is saved in the marked
@@ -338,6 +340,28 @@ so exporting DB-backed config to YAML does not lose the password.
 > **usable authentication**: a password set, *or* OTP enabled with both
 > `admin.super_admin_user_id` and a valid `bot_token`. See
 > [installation.md](installation.md#minimal-cloud-instance-without-a-config-file).
+
+### Moderator web UI (isolated, limited)
+
+The super-admin panel above is the full UI. Moderators (anyone who is an admin in a
+moderation/admin chat) can be given a **separate, restricted** web UI without sharing the
+super-admin credentials:
+
+- It is served under its own `moderator_path_prefix` (default `/mod`, must differ from
+  `path_prefix`). Only moderation, messages, profiles and a **read-only** diagnostics page are
+  mounted — configuration, logs, the system page and all test/debug actions don't exist under
+  this prefix (they return 404), so they can't be reached even by URL.
+- Access is granted on demand: a moderator opens the bot, taps **🛡️ Access Web UI** on the
+  `/start` menu, and the bot sends a **one-time login link plus a separate OTP**. Opening the
+  link and entering the matching OTP grants a moderator-scoped session. The link is single-use,
+  expires after 5 minutes, and is useless without the OTP.
+- `public_url` is the externally-reachable base URL used to build that link
+  (e.g. `https://bot.example.com`), **without** the path prefix. If it's empty, it falls back to
+  the scheme + host of `webhook.url` (handy for webhook deployments). If neither is set, the
+  "Access Web UI" button is hidden from the keyboard and moderator login is unavailable.
+
+Moderator sessions are role-scoped: a moderator token is rejected by the super-admin endpoints,
+and its cookie is scoped to the moderator prefix.
 
 ---
 
@@ -423,6 +447,11 @@ ai:
     # Stricter rules for brand-new users (first message within new_user_window_hours).
     new_user_window_hours: 24    # how long a user counts as "new"
     new_user_rules: ""           # injected via {{new_user_rules}}, only for new users
+
+    # Double-check a user's first N messages with the full model even when the
+    # light model found nothing (catches subtle spam new members slip past the
+    # cheap model). Counted per user per chat. 0 = disabled.
+    full_model_first_messages: 0
 
     # Map a substring of the model's verdict to an action.
     # Rules run in order; every matching rule fires (you can stack actions).
@@ -528,12 +557,14 @@ ai:
     # description, photo). Photos are screened with Content Safety first, and
     # only described via Vision / OCR.space when Content Safety is unavailable
     # or fails; all the text is judged by the new_user_profile_prompt below.
-    # Works WITHOUT content_safety_enabled.
+    # Works WITHOUT content_safety_enabled. The prompt MUST reply exactly CLEAN
+    # for good profiles; any other reply is recorded as a finding.
     new_user_profile_check_enabled: false
+    # Judge the gathered profile text with the FULL model instead of the light
+    # model - better at subtle spam/scam/promo cues, at a higher per-call cost.
+    # Only affects the AI text verdict; photo screening is unchanged. Default: false.
+    new_user_profile_use_full_model: false
     new_user_profile_prompt:
-      system: |
-        You are a moderation assistant screening a new chat member's public profile…
-        Reply with exactly CLEAN when nothing is concerning, otherwise a brief concern.
       user: |
         Analyze the following profile:
 

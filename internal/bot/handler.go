@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"gennadium/internal/database"
 	"gennadium/internal/i18n"
@@ -65,124 +64,11 @@ func (b *Bot) handleMessage(message *tgbotapi.Message, isEdited bool) {
 		}
 	}
 
-	// Process messages in moderation chat
+	// Process messages in moderation chat: run the ordered ingest pipeline
+	// (dump → cruel-mute → prepare-deletion → enhance → moderate → summary →
+	// links-and-creative → finalize-deletion). See pipeline.go.
 	if b.config.IsModerationChat(message.Chat.ID) {
-		if b.config.Debug.DumpModerationMessages {
-			b.dumpMessageToFile(message, "moderation", isEdited)
-		}
-
-		// Cruel-mute enforcement: if the user has an active cruel mute in this chat,
-		// silently delete the message and skip all further processing.
-		if !isEdited && b.handleCruelMuteIfActive(message) {
-			return
-		}
-
-		isExcludedFromAnalysis := !b.config.IsModerationActive(message.Chat.ID, messageTopic(message))
-
-		// Pre-compute deletion-queue flags so we can bundle the messages_for_deletion
-		// insert into the same DB transaction as message_info + profile tracking
-		// when the message flows through analyzeMessage (the hot path).
-		shouldAddToDeletion := b.config.MessageDeletion.Enabled && !b.isServiceMessage(message) && b.shouldAddToDeleteQueue(message)
-		deletionPinned := false
-		if shouldAddToDeletion && message.From != nil {
-			for _, excludedUserID := range b.config.MessageDeletion.ExcludedUserIDs {
-				if message.From.ID == excludedUserID {
-					deletionPinned = true
-					log.Printf("Message %d from excluded user %d will be marked as pinned (never deleted)", message.MessageID, excludedUserID)
-					break
-				}
-			}
-		}
-		// True once any code path below has already inserted the row into
-		// messages_for_deletion, so the fallback insert at the end can be skipped.
-		deletionHandled := false
-
-		// Moderation exclusion (moderation.excluded_topics, incl. topic: -1 for a
-		// whole chat) only turns off *AI moderation* (bad-message filtering). It
-		// must NOT stop us from recording the message or running the other,
-		// independently-scoped features (message/link summaries, creative
-		// replies, deletion). Each of those self-gates on its own scope
-		// predicate, and analyzeMessage's moderation step self-gates on
-		// IsModerationActive - so an excluded (chat, topic) records the message
-		// and runs its features without ever moderating it.
-		enhancedText := message.Text
-		if enhancedText == "" {
-			enhancedText = message.Caption
-		}
-
-		// Vision/OCR enhancement and the Content-Safety image route are
-		// moderation-only: they enrich the text for the moderator and can route a
-		// flagged image into moderation. Skip them entirely when the (chat,
-		// topic) is excluded from moderation.
-		contentSafetyFlagged := false
-		skipVision := message.From != nil && b.isUserWhitelisted(message.From.ID) && !b.config.AI.DailySummary.Enabled
-		if !isExcludedFromAnalysis && b.config.AI.Enabled && !skipVision && (b.config.AI.ContentModeration.VisionEnabled || b.config.AI.ContentModeration.OCRSpaceEnabled) {
-			enhancedText, contentSafetyFlagged = b.processMessageEnhancements(message)
-		}
-
-		enhancedMessage := *message
-		enhancedMessage.Text = enhancedText
-
-		if contentSafetyFlagged {
-			// Only reachable for non-excluded (chat, topic): the vision call above
-			// is gated on !isExcludedFromAnalysis.
-			log.Printf("⚠️ Content Safety flagged image in message %d, routing to moderation", message.MessageID)
-			csRules := b.matchContentSecurityRules()
-			if len(csRules) > 0 {
-				csDetails := i18n.T("mod.content_security_details")
-				b.handleBadWordDetected(&enhancedMessage, enhancedText, true, csRules, csDetails)
-			} else {
-				log.Printf("⚠️ Content Safety flagged message %d but no content-security rules configured, skipping", message.MessageID)
-			}
-		} else {
-			// analyzeMessage records the message (message_info + profile tracking)
-			// and bundles the deletion-queue insert into the same transaction for
-			// non-edited messages. Its moderation step self-gates on
-			// IsModerationActive, so excluded (chat, topic) pairs are recorded but
-			// not moderated.
-			recOpts := incomingRecordOpts{AddToDeletion: shouldAddToDeletion, DeletionPinned: deletionPinned}
-			b.analyzeMessage(&enhancedMessage, isEdited, recOpts)
-			if !isEdited && shouldAddToDeletion {
-				deletionHandled = true
-			}
-		}
-
-		if b.config.AI.Enabled && b.config.AI.MessageSummaries.Enabled {
-			topic := messageTopic(message)
-			isExcludedFromSummary := !b.config.IsMessageSummaryActive(message.Chat.ID, topic)
-			isExcludedUser := message.From != nil && b.isMessageSummaryExcludedUser(message.From.ID)
-			if !isEdited && utf8.RuneCountInString(enhancedText) > b.config.AI.MessageSummaries.MinLength && !isExcludedFromSummary && !isExcludedUser {
-				go b.generateMessageSummary(&enhancedMessage)
-			} else if isExcludedFromSummary {
-				log.Printf("Skipping AI summary for message %d - (chat, topic) excluded from summaries", message.MessageID)
-			} else if isExcludedUser {
-				log.Printf("Skipping AI summary for message %d - user %d is excluded", message.MessageID, message.From.ID)
-			}
-		}
-
-		if !isEdited && b.config.AI.Enabled &&
-			(b.config.AI.LinkSummaries.Enabled || b.config.AI.CreativeReplies.Enabled) {
-			go b.processLinksAndCreativeReply(message, &enhancedMessage)
-		}
-
-		if shouldAddToDeletion && !deletionHandled {
-			err := b.db.AddMessageForDeletionWithPinnedStatus(message.MessageID, message.Chat.ID, deletionPinned)
-			if err != nil {
-				log.Printf("Error adding message for deletion: %v", err)
-			}
-		} else if b.isServiceMessage(message) {
-			log.Printf("Message %d is a service message - not adding to deletion queue", message.MessageID)
-
-			if message.PinnedMessage != nil {
-				err := b.db.MarkMessageAsPinned(message.PinnedMessage.MessageID, message.Chat.ID, true)
-				if err != nil {
-					log.Printf("Error marking message %d as pinned: %v", message.PinnedMessage.MessageID, err)
-				} else {
-					log.Printf("Marked message %d as pinned in chat %d", message.PinnedMessage.MessageID, message.Chat.ID)
-				}
-			}
-		}
-		return
+		b.runModerationPipeline(b.newInboundContext(message, isEdited))
 	}
 }
 
@@ -192,18 +78,24 @@ func (b *Bot) isBotMentioned(message *tgbotapi.Message) bool {
 		return false
 	}
 
+	mention := "@" + b.botSelf.Username
+
 	if message.Entities != nil {
 		for _, entity := range message.Entities {
 			if entity.Type == "mention" {
 				mentionText := message.Text[entity.Offset : entity.Offset+entity.Length]
-				if mentionText == "@"+b.botSelf.Username {
+				if mentionText == mention {
 					return true
 				}
 			}
 		}
 	}
 
-	if strings.Contains(message.Text, "@"+b.botSelf.Username) {
+	// Match the @username in the message text or in a media caption. Photos,
+	// videos and other media carry their text in Caption, and the inbound
+	// adapter does not surface caption entities, so a substring check is the
+	// only way to detect a mention written in a caption.
+	if strings.Contains(message.Text, mention) || strings.Contains(message.Caption, mention) {
 		return true
 	}
 
@@ -224,19 +116,26 @@ func (b *Bot) handleBotMention(message *tgbotapi.Message) {
 	}
 
 	if b.config.IsModerationChat(message.Chat.ID) && message.ReplyToMessage != nil {
-		if message.ReplyToMessage.Text != "" || message.ForwardFrom != nil {
-			log.Printf("Bot mentioned as reply to message with text (ID: %d) - triggering moderation", message.ReplyToMessage.MessageID)
+		// A mention replying to one of the bot's OWN messages is conversation
+		// aimed at the bot (handled by the creative-reply path), not a moderation
+		// complaint about another user's message. Don't route it to moderation -
+		// fall through so the creative reply can answer it.
+		replyTargetIsBot := message.ReplyToMessage.From != nil &&
+			message.ReplyToMessage.From.ID == b.botSelf.ID
+		if !replyTargetIsBot {
+			if message.ReplyToMessage.Text != "" || message.ForwardFrom != nil {
+				log.Printf("Bot mentioned as reply to message with text (ID: %d) - triggering moderation", message.ReplyToMessage.MessageID)
 
-			err := b.db.AddMessageForDeletion(message.MessageID, message.Chat.ID)
-			if err != nil {
-				log.Printf("Error adding bot mention message to deletion queue: %v", err)
-			} else {
-				log.Printf("Added bot mention message %d to deletion queue", message.MessageID)
+				err := b.db.AddMessageForDeletion(message.MessageID, message.Chat.ID)
+				if err != nil {
+					log.Printf("Error adding bot mention message to deletion queue: %v", err)
+				} else {
+					log.Printf("Added bot mention message %d to deletion queue", message.MessageID)
+				}
+
+				b.handleReplyModerationTrigger(message)
+				return
 			}
-
-			b.handleReplyModerationTrigger(message)
-			return
-		} else {
 			log.Printf("🔍 Bot mentioned as reply to message without text content:")
 			log.Printf("   📝 Reply to Message ID: %d", message.ReplyToMessage.MessageID)
 			log.Printf("   💬 Chat ID: %d", message.ReplyToMessage.Chat.ID)

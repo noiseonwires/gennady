@@ -3,7 +3,6 @@
 package bot
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -23,26 +22,31 @@ import (
 // (https://t.me/c/<id>/<id>[/<id>]). Compiled once at package load.
 var messageLinkRegex = regexp.MustCompile(`https://t\.me/c/(\d+)/(\d+)(?:/(\d+))?`)
 
-// incomingRecordOpts carries the side-effect flags for the combined
-// RecordIncomingMessage write performed by analyzeMessage on non-edited
-// moderation-chat messages. The handler computes them upfront so a single
-// transaction can cover message_info + messages_for_deletion + general profile
-// tracking instead of issuing 5 separate round-trips.
-type incomingRecordOpts struct {
-	AddToDeletion  bool
-	DeletionPinned bool
+// analyzeMessage records the inbound message and runs AI/bad-word moderation on
+// it, returning true when the message was flagged and acted on. It is a thin
+// coordinator over the recording and moderation halves, both of which operate on
+// the shared MsgContext (the vision-enriched EnhancedMsg, the edit flag, the
+// resolved Scope, and the pre-computed deletion-queue flags).
+func (b *Bot) analyzeMessage(mc *MsgContext) bool {
+	messageText, proceed := b.recordMessage(mc)
+	if !proceed {
+		return false
+	}
+	return b.moderateMessage(mc, messageText)
 }
 
-// analyzeMessage analyzes a message for bad words, watchlist words, and vyimka requests
-func (b *Bot) analyzeMessage(message *tgbotapi.Message, isEdited bool, recOpts incomingRecordOpts) {
-	// Message text is already enhanced with image analysis at this point
-	messageText := message.Text
+// recordMessage stores the inbound message in message_info and returns the text
+// used for moderation plus whether processing should proceed. proceed is false
+// only when an edited message's text was unchanged (a no-op reaction event), in
+// which case nothing was written and moderation is skipped.
+func (b *Bot) recordMessage(mc *MsgContext) (string, bool) {
+	message := mc.EnhancedMsg
 
-	// If message is empty, try to get text from Caption (for forwarded media messages)
+	// Message text is already enhanced with image analysis at this point.
+	messageText := message.Text
 	if messageText == "" && message.Caption != "" {
 		messageText = message.Caption
 	}
-
 	// For media payloads we don't process (stickers, gifs, videos, voice, …)
 	// store a short descriptor tag in place of the missing text so the chat
 	// history in message_info isn't a wall of blank rows.
@@ -52,7 +56,6 @@ func (b *Bot) analyzeMessage(message *tgbotapi.Message, isEdited bool, recOpts i
 		}
 	}
 
-	// Store message info for potential moderation (even if text is empty, for reply context)
 	userID := int64(0)
 	username := ""
 	if message.From != nil {
@@ -60,7 +63,7 @@ func (b *Bot) analyzeMessage(message *tgbotapi.Message, isEdited bool, recOpts i
 		username = getUserDisplayNameFromUser(message.From)
 	}
 
-	// Capture reply context if this is a reply
+	// Capture reply context if this is a reply.
 	var replyToMessageID *int
 	if message.ReplyToMessage != nil {
 		replyID := message.ReplyToMessage.MessageID
@@ -80,15 +83,15 @@ func (b *Bot) analyzeMessage(message *tgbotapi.Message, isEdited bool, recOpts i
 		Username:         username,
 		Text:             messageText,
 		ReplyToMessageID: replyToMessageID,
-		MessageThreadID:  messageTopic(message),
+		MessageThreadID:  mc.Scope.Topic,
 		QuoteText:        quoteText,
 		Timestamp:        time.Now(),
 	}
 
 	// For forwarded messages, prepend a "<forwarded from: …>" marker to the
 	// *stored* text so the chat history preserves the origin. We deliberately
-	// don't touch the `messageText` variable used for bad-word / AI moderation
-	// below - the moderator should judge the actual content, not our metadata.
+	// don't touch the messageText used for moderation - the moderator should
+	// judge the actual content, not our metadata.
 	if fwd := forwardOriginTag(message); fwd != "" {
 		if messageInfo.Text == "" {
 			messageInfo.Text = fwd
@@ -97,136 +100,163 @@ func (b *Bot) analyzeMessage(message *tgbotapi.Message, isEdited bool, recOpts i
 		}
 	}
 
-	// Use UpdateMessageInfo for edited messages to preserve original timestamp
-	if isEdited {
-		// Check if the message exists in DB and if the text actually changed
-		existingMessage, err := b.db.GetMessageInfo(message.MessageID, message.Chat.ID)
-		if err != nil || existingMessage == nil {
-			// Message not found in DB (e.g. edit of a very old message) - skip saving but still moderate
-			log.Printf("Edited message %d not found in DB - skipping save", message.MessageID)
-		} else if existingMessage.Text == messageInfo.Text {
-			// Text is the same, this is likely just a reaction event - skip re-analysis
-			log.Printf("Message %d received 'edited' event but text unchanged - skipping (likely a reaction)", message.MessageID)
-			return
-		} else {
-			// Preserve a diff of the change in extra_info so the original content
-			// isn't lost when the user edits their message, while keeping the stored
-			// data compact. We append a clearly marked block with the edit time and
-			// a line-based diff (old vs new) to any existing extra info.
-			//
-			// Skip recording the diff for trivial edits (a couple of characters,
-			// e.g. fixing a typo) - they add noise without useful context. The
-			// message text itself is still updated below.
-			const minEditDiffChars = 5
-			if levenshteinDistance(existingMessage.Text, messageInfo.Text) >= minEditDiffChars {
-				editTime := time.Now()
-				if message.EditDate != 0 {
-					editTime = time.Unix(int64(message.EditDate), 0)
-				}
-				editNote := fmt.Sprintf("[Edit diff at %s]\n%s",
-					editTime.Format("2006-01-02 15:04:05"), computeTextDiff(existingMessage.Text, messageInfo.Text))
-				if existingMessage.ExtraInfo != "" {
-					messageInfo.ExtraInfo = existingMessage.ExtraInfo + "\n\n" + editNote
-				} else {
-					messageInfo.ExtraInfo = editNote
-				}
-			} else {
-				// Keep any previously stored extra_info intact for minor edits.
-				messageInfo.ExtraInfo = existingMessage.ExtraInfo
-			}
+	if mc.IsEdited {
+		if !b.recordEditedMessage(mc, messageInfo) {
+			return "", false
+		}
+		return messageText, true
+	}
 
-			err = b.db.UpdateMessageInfo(messageInfo)
-			if err != nil {
-				log.Printf("Error updating message info: %v", err)
-			}
+	b.recordNewMessage(mc, messageInfo)
+	return messageText, true
+}
+
+// recordEditedMessage updates message_info for an edited message, preserving the
+// original timestamp and recording a diff of substantive edits in extra_info. It
+// returns false when the text was unchanged (a no-op reaction event) so the
+// caller skips re-moderation; true otherwise (including when the original row is
+// missing, in which case the edit is still moderated).
+func (b *Bot) recordEditedMessage(mc *MsgContext, messageInfo *database.MessageInfo) bool {
+	message := mc.EnhancedMsg
+
+	existingMessage, err := b.db.GetMessageInfo(message.MessageID, message.Chat.ID)
+	if err != nil || existingMessage == nil {
+		// Message not found in DB (e.g. edit of a very old message) - skip saving but still moderate.
+		log.Printf("Edited message %d not found in DB - skipping save", message.MessageID)
+		return true
+	}
+	if existingMessage.Text == messageInfo.Text {
+		// Text is the same, this is likely just a reaction event - skip re-analysis.
+		log.Printf("Message %d received 'edited' event but text unchanged - skipping (likely a reaction)", message.MessageID)
+		return false
+	}
+
+	// Preserve a diff of the change in extra_info so the original content isn't
+	// lost when the user edits their message, while keeping the stored data
+	// compact. Skip the diff for trivial edits (a couple of characters, e.g.
+	// fixing a typo) - they add noise without useful context.
+	const minEditDiffChars = 5
+	if levenshteinDistance(existingMessage.Text, messageInfo.Text) >= minEditDiffChars {
+		editTime := time.Now()
+		if message.EditDate != 0 {
+			editTime = time.Unix(int64(message.EditDate), 0)
+		}
+		editNote := fmt.Sprintf("[Edit diff at %s]\n%s",
+			editTime.Format("2006-01-02 15:04:05"), computeTextDiff(existingMessage.Text, messageInfo.Text))
+		if existingMessage.ExtraInfo != "" {
+			messageInfo.ExtraInfo = existingMessage.ExtraInfo + "\n\n" + editNote
+		} else {
+			messageInfo.ExtraInfo = editNote
 		}
 	} else {
-		// Detect the user's first message in this chat *before* recording the
-		// current message, so the optional new-user profile screening runs
-		// exactly once per user per chat.
-		firstMessageInChat := false
-		if b.config.AI.ContentModeration.NewUserProfileCheckEnabled &&
-			message.From != nil &&
-			b.config.IsModerationActive(message.Chat.ID, messageTopic(message)) &&
-			b.botSelf.ID != message.From.ID &&
-			!b.isUserWhitelisted(message.From.ID) {
-			if cnt, cerr := b.db.CountUserMessagesInChat(message.From.ID, message.Chat.ID); cerr != nil {
-				log.Printf("First-message check: error counting prior messages for user %d: %v", message.From.ID, cerr)
-			} else if cnt == 0 {
-				firstMessageInChat = true
-			}
-		}
+		// Keep any previously stored extra_info intact for minor edits.
+		messageInfo.ExtraInfo = existingMessage.ExtraInfo
+	}
 
-		// Combine message_info write, deletion-queue insert, and general-profile
-		// tracking into a single transaction to avoid 4-5 sequential DB
-		// round-trips on the hot ingest path. The handler has pre-computed the
-		// deletion-queue flags for us in recOpts.
-		opts := database.IncomingMessageOpts{
-			AddToDeletion:  recOpts.AddToDeletion,
-			DeletionPinned: recOpts.DeletionPinned,
-		}
-		if b.config.UserProfiles.Enabled && message.From != nil &&
-			b.config.IsModerationChat(message.Chat.ID) &&
-			b.botSelf.ID != message.From.ID {
-			displayName := strings.TrimSpace(strings.TrimSpace(message.From.FirstName) + " " + strings.TrimSpace(message.From.LastName))
-			opts.TrackProfile = true
-			opts.Username = message.From.Username
-			opts.DisplayName = displayName
-			opts.DayDate = messageInfo.Timestamp.Format("2006-01-02")
-		}
-		trackResult, err := b.db.RecordIncomingMessage(messageInfo, opts)
-		if err != nil {
-			log.Printf("Error recording incoming message: %v", err)
-		} else if trackResult.NewUserTracked && opts.TrackProfile && opts.Username != "" {
-			// First time we see this user_id (as a tracked profile) AND they
-			// have a @username - check whether that handle was previously held
-			// by a different user_id and alert admins if so.
-			go b.notifyAdminsOnUsernameReuse(userID, opts.Username, opts.DisplayName)
-		}
+	if err := b.db.UpdateMessageInfo(messageInfo); err != nil {
+		log.Printf("Error updating message info: %v", err)
+	}
+	return true
+}
 
-		// On the user's first message, screen their whole public profile (name,
-		// bio, photo and linked personal channel), recording profile notices so
-		// the AI moderation below can take them into account.
-		if firstMessageInChat {
-			b.checkFirstMessageUserProfile(message)
+// recordNewMessage records a newly-received message: it bundles the message_info
+// insert, the deletion-queue insert and general-profile tracking into the single
+// RecordIncomingMessage transaction, alerts on username reuse, counts the
+// moderation-funnel "received" stat, and screens the sender's public profile on
+// their first message in the chat.
+func (b *Bot) recordNewMessage(mc *MsgContext, messageInfo *database.MessageInfo) {
+	message := mc.EnhancedMsg
+	userID := int64(0)
+	if message.From != nil {
+		userID = message.From.ID
+	}
+
+	// Detect the user's first message in this chat *before* recording the
+	// current message, so the optional new-user profile screening runs exactly
+	// once per user per chat.
+	firstMessageInChat := false
+	if b.config.AI.ContentModeration.NewUserProfileCheckEnabled &&
+		message.From != nil &&
+		mc.Scope.Moderate &&
+		b.botSelf.ID != message.From.ID &&
+		!b.isUserWhitelisted(message.From.ID) {
+		if cnt, cerr := b.db.CountUserMessagesInChat(message.From.ID, message.Chat.ID); cerr != nil {
+			log.Printf("First-message check: error counting prior messages for user %d: %v", message.From.ID, cerr)
+		} else if cnt == 0 {
+			firstMessageInChat = true
 		}
 	}
 
-	// If no text content after processing, return (but message was still stored)
+	// Combine message_info write, deletion-queue insert, and general-profile
+	// tracking into a single transaction to avoid 4-5 sequential DB round-trips
+	// on the hot ingest path. The deletion-queue flags were pre-computed by the
+	// prepare-deletion stage and carried on the context.
+	opts := database.IncomingMessageOpts{
+		AddToDeletion:  mc.AddToDeletion,
+		DeletionPinned: mc.DeletionPinned,
+	}
+	if b.config.UserProfiles.Enabled && message.From != nil &&
+		b.config.IsModerationChat(message.Chat.ID) &&
+		b.botSelf.ID != message.From.ID {
+		displayName := strings.TrimSpace(strings.TrimSpace(message.From.FirstName) + " " + strings.TrimSpace(message.From.LastName))
+		opts.TrackProfile = true
+		opts.Username = message.From.Username
+		opts.DisplayName = displayName
+		opts.DayDate = messageInfo.Timestamp.Format("2006-01-02")
+	}
+	trackResult, err := b.db.RecordIncomingMessage(messageInfo, opts)
+	if err != nil {
+		log.Printf("Error recording incoming message: %v", err)
+	} else if trackResult.NewUserTracked && opts.TrackProfile && opts.Username != "" {
+		// First time we see this user_id (as a tracked profile) AND they have a
+		// @username - check whether that handle was previously held by a
+		// different user_id and alert admins if so.
+		go b.notifyAdminsOnUsernameReuse(userID, opts.Username, opts.DisplayName)
+	}
+
+	// Count every message received in a moderation chat (excluding the bot
+	// itself) as the top of the moderation funnel, regardless of whether AI
+	// moderation is active for its specific topic.
+	if b.config.IsModerationChat(message.Chat.ID) && message.From != nil && b.botSelf.ID != message.From.ID {
+		b.recordModStat(database.ModStatReceived)
+	}
+
+	// On the user's first message, screen their whole public profile (name, bio,
+	// photo and linked personal channel), recording profile notices so the AI
+	// moderation can take them into account.
+	if firstMessageInChat {
+		b.checkFirstMessageUserProfile(message)
+	}
+}
+
+// moderateMessage runs AI/bad-word moderation on the recorded message, returning
+// true when it was flagged and acted on. It self-gates on empty text (the
+// message was still recorded for reply/history context) and on the (chat, topic)
+// being actively moderated.
+func (b *Bot) moderateMessage(mc *MsgContext, messageText string) bool {
 	if messageText == "" {
-		return
+		return false
 	}
-
-	/*
-		// Check if this is a reply to a message with bot mention for moderation trigger
-		if message.ReplyToMessage != nil && b.isBotMentioned(message) {
-			b.handleReplyModerationTrigger(message)
-			return // Reply with bot mention was processed, don't run other filters
-		}
-	*/
 
 	// AI/bad-word moderation only applies to actively-moderated (chat, topic)
-	// pairs. A (chat, topic) excluded via moderation.excluded_topics (e.g.
-	// topic: -1 for a whole chat) is still recorded above for chat history,
-	// reply context and the other independently-scoped features, but must never
-	// be moderated. Gate it explicitly and early here - so we also skip the
-	// isUserAdmin lookup and the containsBadWords call - instead of relying on
-	// containsBadWords to silently no-op for excluded scopes.
-	if !b.config.IsModerationActive(message.Chat.ID, messageTopic(message)) {
-		return
+	// pairs. A (chat, topic) excluded via moderation.excluded_topics is still
+	// recorded for chat history and reply context, but must never be moderated.
+	if !mc.Scope.Moderate {
+		return false
 	}
 
+	message := mc.EnhancedMsg
 	messageLower := strings.ToLower(messageText)
-
 	skipAdmin := b.config.AI.ContentModeration.SkipAdminUsers && b.isUserAdmin(message.From.ID)
 	if message.From != nil && !skipAdmin && !b.isUserWhitelisted(message.From.ID) {
-		// Check for bad words using the processed text (including image analysis)
+		// Check for bad words using the processed text (including image analysis).
 		matchedRules, isContentFilter, decisionDetails := b.containsBadWords(messageLower, message, messageText)
 		if len(matchedRules) > 0 {
 			b.handleBadWordDetected(message, messageText, isContentFilter, matchedRules, decisionDetails)
-			return // Don't check other filters if bad word is found
+			return true // moderated - don't check other filters
 		}
 	}
+	return false
 }
 
 // buildModerationReplyContext builds the {{reply_to}} prompt fragment from a
@@ -278,114 +308,147 @@ func (b *Bot) buildModerationReplyContext(message *tgbotapi.Message) string {
 	return i18n.Tf("mod.reply_context", quotedFrom, replyText)
 }
 
-// containsBadWords checks if message contains any bad words using AI analysis first, then traditional lookup
-// Uses two-stage AI analysis: light model first, then full model confirmation
-// Returns: (matchedRules, isContentFilterViolation, decisionDetails). When isContentFilter is
-// true and matchedRules is empty, the message was flagged by Azure's safety
-// filter rather than a custom rule and should be handled as a hard delete.
-// When multiple rules match, all are returned in declaration order so the
-// caller can dispatch each action (e.g. warn AND report).
-// decisionDetails contains any explanatory text the LLM provided after the
-// trigger line (lines 2+ of the response).
+// containsBadWords runs the two-stage AI moderation on a message and returns the
+// verdict tuple (matchedRules, isContentFilter, decisionDetails). When
+// isContentFilter is true and matchedRules is empty, the provider safety filter
+// flagged the message rather than a custom rule, and it should be handled as a
+// hard delete. When multiple rules match they are returned in declaration order
+// so the caller can dispatch each action (e.g. warn AND report). decisionDetails
+// is the LLM's explanatory text (lines after the trigger line).
+//
+// This is the imperative shell: it performs the AI calls, reactions, stats and
+// placeholder writes, deferring every branch decision to the pure functions in
+// classifier.go (decideConfirmedVerdict / decideDoubleCheckVerdict).
 func (b *Bot) containsBadWords(messageText string, message *tgbotapi.Message, fullMessageText string) ([]config.ModerationRule, bool, string) {
-	messageText = strings.ToLower(messageText)
+	if !b.config.AI.ContentModeration.Enabled || message == nil || !b.config.IsModerationChat(message.Chat.ID) {
+		return nil, false, ""
+	}
+	// Defense-in-depth: the sole caller (analyzeMessage) already returns early
+	// for excluded (chat, topic) pairs, but re-check so this never moderates an
+	// excluded scope regardless of caller.
+	if !b.config.IsModerationActive(message.Chat.ID, messageTopic(message)) {
+		return nil, false, ""
+	}
 
-	// First, try AI content analysis if enabled and applicable
-	if b.config.AI.ContentModeration.Enabled && message != nil &&
-		b.config.IsModerationChat(message.Chat.ID) {
+	replyToText := b.buildModerationReplyContext(message)
 
-		// Defense-in-depth: the sole caller (analyzeMessage) already returns
-		// early for excluded (chat, topic) pairs, but re-check here so this
-		// function never moderates an excluded scope regardless of caller.
-		isExcludedSubchat := !b.config.IsModerationActive(message.Chat.ID, messageTopic(message))
+	// Stage 1: light model.
+	lightRules, lightDetails, lightErr := b.analyzeMessageContentWithLightModel(fullMessageText, message.From.ID, message.Chat.ID, replyToText)
+	light := newModelOutcome(lightRules, lightDetails, lightErr)
+	switch {
+	case light.contentFilter:
+		log.Printf("⚠️ Content filter triggered by light model for message %d - will confirm with full model", message.MessageID)
+		b.setMessageReaction(message.Chat.ID, message.MessageID, b.config.Reactions.SuspiciousMessage)
+	case light.transientErr:
+		log.Printf("Error in AI content analysis (light model): %v", lightErr)
+	}
 
-		// Only use AI analysis for non-excluded subchats and main chat
-		if !isExcludedSubchat {
-			// Build reply-to context for the AI prompt
-			replyToText := b.buildModerationReplyContext(message)
-
-			// Stage 1: Light model analysis
-			lightRules, lightDetails, err := b.analyzeMessageContentWithLightModel(fullMessageText, message.From.ID, message.Chat.ID, replyToText)
-			lightModelContentFilter := false
-			var lightCFDetails string
-			if err != nil {
-				// Check if content filter was triggered - needs confirmation with full model
-				var cfErr *ContentFilterError
-				if errors.As(err, &cfErr) {
-					log.Printf("⚠️ Content filter triggered by light model for message %d - will confirm with full model", message.MessageID)
-					lightModelContentFilter = true
-					lightCFDetails = cfErr.Details
-					// Set thinking emoji to indicate processing
-					b.setMessageReaction(message.Chat.ID, message.MessageID, b.config.Reactions.SuspiciousMessage)
-				} else {
-					log.Printf("Error in AI content analysis (light model): %v", err)
-					// Continue without AI analysis on error
-				}
-			}
-			if len(lightRules) > 0 || lightModelContentFilter {
-				// Light model detected bad content or content filter triggered
-				if len(lightRules) > 0 {
-					log.Printf("🔍 Light model flagged message %d with %d rule(s), confirming with full model...",
-						message.MessageID, len(lightRules))
-					// Set thinking emoji to indicate processing
-					b.setMessageReaction(message.Chat.ID, message.MessageID, b.config.Reactions.SuspiciousMessage)
-				}
-
-				// Stage 2: Full model confirmation
-				fullRules, fullDetails, err := b.analyzeMessageContentWithFullModel(fullMessageText, message.From.ID, message.Chat.ID, replyToText)
-				if err != nil {
-					// Check if content filter was triggered - this is definitive
-					var cfErr *ContentFilterError
-					if errors.As(err, &cfErr) {
-						log.Printf("⚠️ Content filter triggered by full model for message %d", message.MessageID)
-						csRules := b.matchContentSecurityRules()
-						csDetails := i18n.T("mod.content_security_details")
-						if cfErr.Details != "" {
-							csDetails += "\n" + cfErr.Details
-						}
-						b.replaceMessageContentWithPlaceholder(message.MessageID, message.Chat.ID, i18n.T("filter.content_removed"), csDetails)
-						return csRules, true, csDetails
-					}
-					log.Printf("Error in AI content analysis (full model): %v, treating light model result as authoritative", err)
-					// On full model error, trust light model result (including content filter)
-					if lightModelContentFilter {
-						csRules := b.matchContentSecurityRules()
-						csDetails := i18n.T("mod.content_security_details")
-						if lightCFDetails != "" {
-							csDetails += "\n" + lightCFDetails
-						}
-						b.replaceMessageContentWithPlaceholder(message.MessageID, message.Chat.ID, i18n.T("filter.content_removed"), csDetails)
-						return csRules, true, csDetails
-					}
-					return lightRules, false, lightDetails
-				}
-
-				if len(fullRules) > 0 {
-					// Full model confirmed - it's bad content. Prefer the full
-					// model's verdict (rule set) over the light model's.
-					log.Printf("✅ Full model confirmed bad content in message %d (%d rule(s))",
-						message.MessageID, len(fullRules))
-					if lightModelContentFilter {
-						csDetails := i18n.T("mod.content_security_details")
-						if lightCFDetails != "" {
-							csDetails += "\n" + lightCFDetails
-						}
-						b.replaceMessageContentWithPlaceholder(message.MessageID, message.Chat.ID, "[The message was not saved, because it violated AI content policies.]", csDetails)
-						return fullRules, true, fullDetails
-					}
-					return fullRules, false, fullDetails
-				} else {
-					// Full model disagreed - clear the reaction and don't flag
-					log.Printf("❌ Full model did NOT confirm bad content in message %d, clearing reaction", message.MessageID)
-					b.clearMessageReaction(message.Chat.ID, message.MessageID)
-					return nil, false, ""
-				}
-			}
-			// Light model said it's OK - no further action needed
+	if light.flagged() {
+		b.recordModStat(database.ModStatLightFlagged)
+		if len(light.rules) > 0 {
+			log.Printf("🔍 Light model flagged message %d with %d rule(s), confirming with full model...", message.MessageID, len(light.rules))
+			b.setMessageReaction(message.Chat.ID, message.MessageID, b.config.Reactions.SuspiciousMessage)
 		}
+
+		// Stage 2: full-model confirmation.
+		fullRules, fullDetails, fullErr := b.analyzeMessageContentWithFullModel(fullMessageText, message.From.ID, message.Chat.ID, replyToText)
+		full := newModelOutcome(fullRules, fullDetails, fullErr)
+		switch {
+		case full.contentFilter:
+			log.Printf("⚠️ Content filter triggered by full model for message %d", message.MessageID)
+		case full.transientErr:
+			log.Printf("Error in AI content analysis (full model): %v, treating light model result as authoritative", fullErr)
+		case len(full.rules) > 0:
+			log.Printf("✅ Full model confirmed bad content in message %d (%d rule(s))", message.MessageID, len(full.rules))
+		}
+		return b.applyVerdictDecision(message, decideConfirmedVerdict(light, full))
+	}
+
+	// New-user double-check: the light model cleared the message, but for a
+	// user's first N messages run the full model too to catch subtle spam the
+	// cheaper light model may have missed.
+	if b.shouldFullModelDoubleCheck(message.From.ID, message.Chat.ID) {
+		log.Printf("🔁 Light model cleared message %d but user is within first %d message(s) - double-checking with full model", message.MessageID, b.config.AI.ContentModeration.FullModelFirstMessages)
+		fullRules, fullDetails, fullErr := b.analyzeMessageContentWithFullModel(fullMessageText, message.From.ID, message.Chat.ID, replyToText)
+		full := newModelOutcome(fullRules, fullDetails, fullErr)
+		switch {
+		case full.contentFilter:
+			log.Printf("⚠️ Content filter triggered by full model on new-user double-check for message %d", message.MessageID)
+		case full.transientErr:
+			log.Printf("Error in AI content analysis (full-model new-user double-check) for message %d: %v", message.MessageID, fullErr)
+		case len(full.rules) > 0:
+			log.Printf("✅ Full model flagged message %d on new-user double-check (%d rule(s))", message.MessageID, len(full.rules))
+		default:
+			log.Printf("❌ Full model also cleared message %d on new-user double-check", message.MessageID)
+		}
+		return b.applyVerdictDecision(message, decideDoubleCheckVerdict(full))
 	}
 
 	return nil, false, ""
+}
+
+// applyVerdictDecision materialises the terminal side effect of a pure
+// verdictDecision and returns the (matchedRules, isContentFilter, decisionDetails)
+// tuple in the shape containsBadWords' caller expects.
+func (b *Bot) applyVerdictDecision(message *tgbotapi.Message, d verdictDecision) ([]config.ModerationRule, bool, string) {
+	switch d.effect {
+	case effectClearReaction:
+		log.Printf("❌ Full model did NOT confirm bad content in message %d, clearing reaction", message.MessageID)
+		b.clearMessageReaction(message.Chat.ID, message.MessageID)
+		return nil, false, ""
+	case effectPlaceholderRemoved:
+		csRules := b.matchContentSecurityRules()
+		csDetails := i18n.T("mod.content_security_details")
+		if d.cfDetails != "" {
+			csDetails += "\n" + d.cfDetails
+		}
+		b.replaceMessageContentWithPlaceholder(message.MessageID, message.Chat.ID, i18n.T("filter.content_removed"), csDetails)
+		return csRules, true, csDetails
+	case effectPlaceholderNotSaved:
+		csDetails := i18n.T("mod.content_security_details")
+		if d.cfDetails != "" {
+			csDetails += "\n" + d.cfDetails
+		}
+		b.replaceMessageContentWithPlaceholder(message.MessageID, message.Chat.ID, "[The message was not saved, because it violated AI content policies.]", csDetails)
+		return d.rules, d.isCF, d.details
+	default: // effectNone
+		return d.rules, d.isCF, d.details
+	}
+}
+
+// shouldFullModelDoubleCheck reports whether a message the light model cleared
+// should also be checked by the full model because the author is still within
+// their first N messages in the chat (ai.content_moderation
+// .full_model_first_messages). This catches subtle spam from new members that
+// the cheaper light model may miss, at the cost of an extra full-model call for
+// early messages only. Returns false when the feature is disabled (N <= 0) or
+// the user has already posted more than N messages. The current message is
+// already recorded by the time moderation runs, so a count of 1 is the user's
+// first message.
+func (b *Bot) shouldFullModelDoubleCheck(userID, chatID int64) bool {
+	n := b.config.AI.ContentModeration.FullModelFirstMessages
+	if n <= 0 || userID == 0 || b.db == nil {
+		return false
+	}
+	cnt, err := b.db.CountUserMessagesInChat(userID, chatID)
+	if err != nil {
+		log.Printf("Full-model double-check: error counting messages for user %d in chat %d: %v", userID, chatID, err)
+		return false
+	}
+	return cnt <= n
+}
+
+// recordModStat bumps a moderation funnel counter for today's local date.
+// Errors are logged, not propagated, since stats are best-effort and must
+// never disrupt moderation.
+func (b *Bot) recordModStat(stat string) {
+	if b.db == nil {
+		return
+	}
+	day := time.Now().Format("2006-01-02")
+	if err := b.db.IncrementModerationStat(stat, day, 1); err != nil {
+		log.Printf("Error recording moderation stat %q: %v", stat, err)
+	}
 }
 
 // setMessageReaction sets an emoji reaction on a message
@@ -433,6 +496,9 @@ func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText strin
 	}
 	b.moderatedMu.Unlock()
 
+	// A confirmed bad message reaches this point exactly once (after dedupe).
+	b.recordModStat(database.ModStatFullConfirmed)
+
 	ruleDesc := "content_filter"
 	if len(matchedRules) > 0 {
 		parts := make([]string, 0, len(matchedRules))
@@ -473,6 +539,16 @@ func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText strin
 		plan = append(plan, actionStep{action: config.ModerationActionReport, rule: nil})
 	}
 
+	// Count a single auto-action if any step performs a destructive automatic
+	// action (delete/warn/mute). A report-only verdict is left for the admin and
+	// does not count as an auto-action.
+	for _, step := range plan {
+		if step.action == config.ModerationActionDelete || step.action == config.ModerationActionWarn || step.action == config.ModerationActionMute {
+			b.recordModStat(database.ModStatAutoAction)
+			break
+		}
+	}
+
 	// Auto-moderation actions are dispatched strictly serially: each
 	// b.autoModerate* call returns before the next plan step starts. This
 	// guarantees ordering (e.g. a warn rule preceding a report rule means the
@@ -505,19 +581,6 @@ func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText strin
 		log.Printf("Auto-moderation: finished step %d/%d action=%s for message %d",
 			i+1, len(plan), step.action, message.MessageID)
 	}
-}
-
-// wasMessageModerated reports whether the given message was recently flagged and
-// acted on by content moderation. handleBadWordDetected records every actioned
-// message in moderatedMsgs (keyed chatID_messageID); analyzeMessage runs that
-// synchronous moderation pass before the creative-reply goroutine is launched,
-// so a true result here means the message is itself a violation.
-func (b *Bot) wasMessageModerated(chatID int64, messageID int) bool {
-	modKey := fmt.Sprintf("%d_%d", chatID, messageID)
-	b.moderatedMu.Lock()
-	defer b.moderatedMu.Unlock()
-	t, ok := b.moderatedMsgs[modKey]
-	return ok && time.Since(t) < 10*time.Minute
 }
 
 // handleMessageLinkForModeration handles message links sent for manual moderation

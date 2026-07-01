@@ -5,6 +5,7 @@ package bot
 import (
 	"encoding/json"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -16,13 +17,7 @@ import (
 
 // sendAdminMenu sends the admin menu with keyboard options.
 func (b *Bot) sendAdminMenu(message *tgbotapi.Message) {
-	keyboard := telegram.NewKeyboard(
-		telegram.NewRow(telegram.NewButton(i18n.T("btn.view_muted"), "admin_muted_users")),
-		telegram.NewRow(telegram.NewButton(i18n.T("btn.view_actions"), "admin_last_actions")),
-		telegram.NewRow(telegram.NewButton(i18n.T("btn.top10"), "admin_top10_bad_users")),
-		telegram.NewRow(telegram.NewButton(i18n.T("btn.punish"), "admin_punish")),
-		telegram.NewRow(telegram.NewButton(i18n.T("btn.about"), "admin_about")),
-	)
+	keyboard := telegram.NewKeyboard(b.adminMenuRows()...)
 
 	menuText := i18n.Tf("menu.admin_text", BotName)
 
@@ -40,6 +35,61 @@ func (b *Bot) sendAdminMenu(message *tgbotapi.Message) {
 		log.Printf("Error sending admin menu: %v", err)
 	}
 }
+
+// adminMenuRows builds the admin-menu keyboard rows. The "Access Web UI" row is
+// included only when a moderator login link can actually be issued (see
+// moderatorWebLoginAvailable), so the button is hidden when the public URL is
+// not configured.
+func (b *Bot) adminMenuRows() [][]telegram.InlineButton {
+	rows := [][]telegram.InlineButton{
+		telegram.NewRow(telegram.NewButton(i18n.T("btn.view_muted"), "admin_muted_users")),
+		telegram.NewRow(telegram.NewButton(i18n.T("btn.view_actions"), "admin_last_actions")),
+		telegram.NewRow(telegram.NewButton(i18n.T("btn.top10"), "admin_top10_bad_users")),
+		telegram.NewRow(telegram.NewButton(i18n.T("btn.stats"), "admin_stats")),
+		telegram.NewRow(telegram.NewButton(i18n.T("btn.punish"), "admin_punish")),
+	}
+	if b.moderatorWebLoginAvailable() {
+		rows = append(rows, telegram.NewRow(telegram.NewButton(i18n.T("btn.access_web_ui"), "admin_mod_web")))
+	}
+	rows = append(rows, telegram.NewRow(telegram.NewButton(i18n.T("btn.about"), "admin_about")))
+	return rows
+}
+
+// moderatorWebLoginAvailable reports whether the "Access Web UI" button should
+// be offered. It requires the web UI to be able to mint moderator logins and a
+// resolvable public base URL to build a working one-time link; it also guards
+// against the moderator prefix colliding with (or being unset relative to) the
+// super-admin prefix, which disables the moderator UI server-side.
+func (b *Bot) moderatorWebLoginAvailable() bool {
+	if b.generateModeratorLogin == nil {
+		return false
+	}
+	if b.effectivePublicURL() == "" {
+		return false
+	}
+	prefix := strings.TrimRight(strings.TrimSpace(b.config.WebUI.PathPrefix), "/")
+	modPrefix := strings.TrimRight(strings.TrimSpace(b.config.WebUI.ModeratorPathPrefix), "/")
+	return modPrefix != "" && modPrefix != prefix
+}
+
+// effectivePublicURL returns the externally-reachable base URL of the web UI
+// (scheme + host, no path prefix), used to build moderator one-time login
+// links. It prefers web_ui.public_url; when that is unset it falls back to the
+// scheme+host of webhook.url, so a webhook deployment needs no extra config.
+// Returns "" when neither is available.
+func (b *Bot) effectivePublicURL() string {
+	if u := strings.TrimSpace(b.config.WebUI.PublicURL); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+	if wu := strings.TrimSpace(b.config.Webhook.URL); wu != "" {
+		if parsed, err := url.Parse(wu); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			return parsed.Scheme + "://" + parsed.Host
+		}
+	}
+	return ""
+}
+
+
 
 // handleSuperAdminCommand handles Super admin commands for silent moderation.
 func (b *Bot) handleSuperAdminCommand(message *tgbotapi.Message) bool {

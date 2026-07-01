@@ -88,6 +88,11 @@ COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 
 COPY --from=build /out/gennadium ./gennadium
 
+# config.example.yaml seeds the database on first run when the bot starts with
+# no config file (database-as-config mode). This is required for deployments
+# with an ephemeral filesystem and a remote DB.
+COPY --from=build /app/config.example.yaml ./config.example.yaml
+
 # Web UI / webhook HTTP server (see server.listen_port in config.yaml)
 EXPOSE 8080
 

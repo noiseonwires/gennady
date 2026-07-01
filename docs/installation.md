@@ -189,6 +189,12 @@ services:
 > Also change `web_ui.path_prefix` from the default `/admin` to a custom value - it makes the
 > panel harder to discover by automated scanners.
 
+> **Moderators?** To also offer an isolated, limited panel for moderators, set
+> `web_ui.public_url` (e.g. `http://localhost:8080` locally, or your public HTTPS URL) and keep
+> `web_ui.moderator_path_prefix` (default `/mod`). In webhook mode the public URL is taken from
+> `webhook.url` automatically. Moderators then request a one-time login link from the bot's
+> `/start` menu. See [Moderator web UI](config.md#moderator-web-ui-isolated-limited).
+
 > Note: the config file is mounted **read-only** here. Edits made in the web UI cannot be
 > written back to a read-only file. To make the web UI the source of truth, run without a
 > mounted config file and store config in the database - see
@@ -221,10 +227,20 @@ web_ui:
   path_prefix: "/manage-7f3a"   # custom prefix instead of the default "/admin"
   password: "strong-password"
   otp_enabled: true
+  # Optional: hand moderators an isolated, limited panel (no config/logs/system).
+  moderator_path_prefix: "/mod"            # must differ from path_prefix
+  public_url: "https://bot.example.com"    # base URL for moderator login links (auto-derived from webhook.url if omitted)
 
 admin:
   super_admin_user_id: 123456789
 ```
+
+> **Moderator access (optional).** Moderators can request a one-time login link from the bot's
+> `/start` menu (**🛡️ Access Web UI**). They land on a restricted panel under
+> `moderator_path_prefix` (moderation, messages, profiles, read-only diagnostics) — configuration,
+> logs and the system page are not served there. The link is built from `web_ui.public_url`; in
+> webhook mode it falls back to the host of `webhook.url`, so you usually don't need to set it.
+> If no public URL can be resolved, the button is hidden and moderator login stays disabled.
 
 **2. Requirements:**
 

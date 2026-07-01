@@ -71,6 +71,13 @@ func setDefaults(config *Config) {
 	if config.DatabaseCleanup.ActionRetentionHours == 0 {
 		config.DatabaseCleanup.ActionRetentionHours = 168
 	}
+	// Update-processing defaults
+	if config.UpdateProcessing.Workers <= 0 {
+		config.UpdateProcessing.Workers = 1
+	}
+	if config.UpdateProcessing.StatsIntervalSeconds == 0 {
+		config.UpdateProcessing.StatsIntervalSeconds = 600
+	}
 	// Scheduled events defaults
 	if config.ScheduledEvents.MissedEventMaxDelayMinutes == 0 {
 		config.ScheduledEvents.MissedEventMaxDelayMinutes = 60
@@ -135,6 +142,9 @@ func setDefaults(config *Config) {
 	// Web UI defaults
 	if config.WebUI.PathPrefix == "" {
 		config.WebUI.PathPrefix = "/admin"
+	}
+	if config.WebUI.ModeratorPathPrefix == "" {
+		config.WebUI.ModeratorPathPrefix = "/mod"
 	}
 	if config.WebUI.OTPEnabled == nil {
 		defaultTrue := true

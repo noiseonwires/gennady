@@ -182,7 +182,7 @@ func TestBehavior_WhitelistedUser_BadMessage_IsNotModerated(t *testing.T) {
 	b.moderatedMsgs = make(map[string]time.Time)
 	b.config.Admin.WhitelistUserIDs = []int64{7}
 
-	b.analyzeMessage(testMessage(-100, 7, 55, "obvious spam"), false, incomingRecordOpts{})
+	b.analyzeMessage(b.newInboundContext(testMessage(-100, 7, 55, "obvious spam"), false))
 
 	assert.Equal(t, 0, rt.count(), "a whitelisted user's message must never reach the AI")
 	assert.Empty(t, tg.DeletedIDs, "a whitelisted user's message must never be deleted")
@@ -204,7 +204,7 @@ func TestBehavior_AdminUser_BadMessage_IsSkippedWhenConfigured(t *testing.T) {
 	b.config.AI.ContentModeration.SkipAdminUsers = true
 	b.config.Admin.SuperAdminUserID = 7 // user 7 is the super-admin
 
-	b.analyzeMessage(testMessage(-100, 7, 55, "obvious spam"), false, incomingRecordOpts{})
+	b.analyzeMessage(b.newInboundContext(testMessage(-100, 7, 55, "obvious spam"), false))
 
 	assert.Equal(t, 0, rt.count(), "an admin's message must not be analyzed when SkipAdminUsers is on")
 	assert.Empty(t, tg.DeletedIDs)
@@ -243,7 +243,7 @@ func TestBehavior_InboundMessage_AIFlagsIt_GetsDeleted(t *testing.T) {
 		{Trigger: "spam", Action: "delete", Description: "spam"},
 	}
 
-	b.analyzeMessage(testMessage(-100, 7, 55, "buy cheap stuff now"), false, incomingRecordOpts{})
+	b.analyzeMessage(b.newInboundContext(testMessage(-100, 7, 55, "buy cheap stuff now"), false))
 
 	require.Len(t, tg.DeletedIDs, 1, "an AI-flagged message must be deleted end to end")
 	assert.Equal(t, [2]int64{-100, 55}, tg.DeletedIDs[0])
@@ -263,7 +263,7 @@ func TestBehavior_InboundCleanMessage_IsLeftAlone(t *testing.T) {
 	moderationConfig(b)
 	b.moderatedMsgs = make(map[string]time.Time)
 
-	b.analyzeMessage(testMessage(-100, 7, 55, "hello everyone"), false, incomingRecordOpts{})
+	b.analyzeMessage(b.newInboundContext(testMessage(-100, 7, 55, "hello everyone"), false))
 
 	assert.Empty(t, tg.DeletedIDs, "a clean message must not be deleted")
 	assert.Empty(t, tg.Restrictions, "a clean message must not get the user muted")

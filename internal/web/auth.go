@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,11 +24,51 @@ const (
 	sessionExpiry     = 24 * time.Hour
 	maxFailedAttempts = 5
 	lockoutDuration   = 15 * time.Minute
+
+	// modLoginExpiry bounds how long a one-time moderator login link + OTP
+	// stays valid after the moderator requests it via the bot keyboard.
+	modLoginExpiry = 5 * time.Minute
 )
+
+// Session roles. The role is encoded as a prefix of the session token (which
+// is part of the hashed credential stored in the DB) so it cannot be forged or
+// elevated: changing the prefix changes the hash, which then matches no stored
+// session. Legacy / super-admin tokens carry no prefix and default to RoleSuper.
+const (
+	RoleSuper     = "super"
+	RoleModerator = "moderator"
+
+	// moderatorTokenPrefix marks a session token as belonging to a moderator.
+	// Super-admin tokens are left unprefixed (raw hex) for backward
+	// compatibility with sessions issued before roles existed.
+	moderatorTokenPrefix = "m_"
+)
+
+// sessionRole derives the role of a session from its token. Only moderator
+// tokens are prefixed; anything else (raw hex, including pre-existing tokens)
+// is treated as a super-admin session.
+func sessionRole(token string) string {
+	if strings.HasPrefix(token, moderatorTokenPrefix) {
+		return RoleModerator
+	}
+	return RoleSuper
+}
 
 type otpEntry struct {
 	code      string
 	expiresAt time.Time
+}
+
+// modLoginEntry is a pending one-time moderator login: a link token (stored
+// hashed) paired with an OTP, both delivered to the moderator over Telegram.
+// A successful login requires presenting both; the entry is single-use and
+// attempt-limited.
+type modLoginEntry struct {
+	tokenHash string // sha256 hash of the one-time link token
+	otp       string
+	userID    int64 // moderator's Telegram user ID (for audit logging)
+	expiresAt time.Time
+	attempts  int
 }
 
 type session struct {
@@ -51,6 +92,9 @@ type AuthManager struct {
 	failedAttempts map[string]*failedAttemptInfo
 	// passwordVerified tracks IPs that passed the password step and are awaiting OTP.
 	passwordVerified map[string]time.Time
+	// pendingModLogins holds one-time moderator login challenges (link token +
+	// OTP) awaiting completion.
+	pendingModLogins []*modLoginEntry
 }
 
 // NewAuthManager creates a new AuthManager backed by the given database.
@@ -95,6 +139,78 @@ func (a *AuthManager) CreatePasswordSession() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.createSession()
+}
+
+// CreateModeratorLogin mints a one-time moderator login challenge bound to the
+// given Telegram user ID. It returns the raw link token (to embed in the login
+// URL fragment) and the OTP (delivered separately). Both are required to log
+// in. The challenge is single-use, attempt-limited and expires after
+// modLoginExpiry. Only the token hash is retained server-side.
+func (a *AuthManager) CreateModeratorLogin(userID int64) (token, otp string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	now := time.Now()
+	// Prune expired challenges.
+	var active []*modLoginEntry
+	for _, e := range a.pendingModLogins {
+		if e.expiresAt.After(now) {
+			active = append(active, e)
+		}
+	}
+
+	token = generateRandomToken(32)
+	otp = generateRandomCode(otpLength)
+	active = append(active, &modLoginEntry{
+		tokenHash: hashSessionToken(token),
+		otp:       otp,
+		userID:    userID,
+		expiresAt: now.Add(modLoginExpiry),
+	})
+	a.pendingModLogins = active
+	return token, otp
+}
+
+// ValidateModeratorLogin verifies a one-time moderator login (link token + OTP)
+// and, on success, consumes the challenge and returns a new moderator session
+// token. A generic error is returned whether the token or the OTP is wrong so
+// the two cases are indistinguishable to a caller. Repeated failures are
+// rate-limited per IP and a challenge is discarded after maxFailedAttempts.
+func (a *AuthManager) ValidateModeratorLogin(token, code, ip string) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if err := a.checkLockout(ip); err != nil {
+		return "", err
+	}
+
+	now := time.Now()
+	tokenHash := hashSessionToken(token)
+	for i, e := range a.pendingModLogins {
+		if e.expiresAt.Before(now) {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(e.tokenHash), []byte(tokenHash)) != 1 {
+			continue
+		}
+		// Matching, unexpired link token. Now the OTP must also match.
+		if subtle.ConstantTimeCompare([]byte(e.otp), []byte(code)) == 1 {
+			a.pendingModLogins = append(a.pendingModLogins[:i], a.pendingModLogins[i+1:]...)
+			delete(a.failedAttempts, ip)
+			return a.createSessionWithRole(RoleModerator), nil
+		}
+		// Wrong OTP for a valid token: burn an attempt and discard the
+		// challenge once the cap is reached so a leaked link can't be brute
+		// forced indefinitely.
+		e.attempts++
+		if e.attempts >= maxFailedAttempts {
+			a.pendingModLogins = append(a.pendingModLogins[:i], a.pendingModLogins[i+1:]...)
+		}
+		return "", a.recordFailure(ip)
+	}
+
+	// Unknown / expired link token.
+	return "", a.recordFailure(ip)
 }
 
 // GenerateOTP creates a new one-time password and returns it.
@@ -280,6 +396,28 @@ func (a *AuthManager) createSession() string {
 	if a.db != nil {
 		if err := a.db.SaveWebSession(hashSessionToken(token), expiresAt); err != nil {
 			log.Printf("auth: failed to persist web session: %v", err)
+		}
+	}
+	return token
+}
+
+// createSessionWithRole creates a session whose role is encoded as a token
+// prefix. Super-admin sessions use the unprefixed createSession for backward
+// compatibility; only moderator sessions are prefixed. Must be called with
+// a.mu held.
+func (a *AuthManager) createSessionWithRole(role string) string {
+	if role != RoleModerator {
+		return a.createSession()
+	}
+	token := moderatorTokenPrefix + generateRandomToken(32)
+	expiresAt := time.Now().Add(sessionExpiry)
+	a.sessions[token] = &session{
+		token:     token,
+		expiresAt: expiresAt,
+	}
+	if a.db != nil {
+		if err := a.db.SaveWebSession(hashSessionToken(token), expiresAt); err != nil {
+			log.Printf("auth: failed to persist moderator web session: %v", err)
 		}
 	}
 	return token

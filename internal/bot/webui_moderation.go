@@ -83,6 +83,22 @@ func (b *Bot) logAction(ctx *webModContext, actionType, reason string, durationM
 	if err := b.db.LogAction(action); err != nil {
 		log.Printf("Error logging WebUI %s action: %v", actionType, err)
 	}
+	b.recordManualModStat(ctx.adminID, actionType)
+}
+
+// recordManualModStat counts a manual moderation outcome unless the actor is the
+// bot itself (auto-moderation is counted separately at decision time). warn /
+// delete / mute count as a manual action; cleared / notbad as a manual clear.
+func (b *Bot) recordManualModStat(adminID int64, actionType string) {
+	if adminID == b.botSelf.ID {
+		return
+	}
+	switch actionType {
+	case "warn", "delete", "mute", "cmute":
+		b.recordModStat(database.ModStatManualAction)
+	case "cleared", "notbad":
+		b.recordModStat(database.ModStatManualCleared)
+	}
 }
 
 // muteDeadline returns the unmute time and reason string for the given

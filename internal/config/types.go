@@ -18,19 +18,20 @@ type Config struct {
 	ProxyURL string `yaml:"proxy_url"`
 	Language string `yaml:"language"`
 
-	Database        DatabaseConfig            `yaml:"database"`
-	Reactions       ReactionsConfig           `yaml:"reactions"`
-	Admin           AdminConfig               `yaml:"admin"`
-	Moderation      ModerationConfig          `yaml:"moderation"`
-	MessageDeletion MessageDeletionConfig     `yaml:"message_deletion"`
-	DatabaseCleanup DatabaseCleanupConfig     `yaml:"database_cleanup"`
-	ScheduledEvents ScheduledEventsConfig     `yaml:"scheduled_events"`
-	Debug           DebugConfig               `yaml:"debug"`
-	Server          ServerConfig              `yaml:"server"`
-	Webhook         WebhookConfig             `yaml:"webhook"`
-	WebUI           WebUIConfig               `yaml:"web_ui"`
-	AI              AzureAIConfig             `yaml:"ai"`
-	UserProfiles    UserProfilesGeneralConfig `yaml:"user_profiles"`
+	Database         DatabaseConfig            `yaml:"database"`
+	Reactions        ReactionsConfig           `yaml:"reactions"`
+	Admin            AdminConfig               `yaml:"admin"`
+	Moderation       ModerationConfig          `yaml:"moderation"`
+	MessageDeletion  MessageDeletionConfig     `yaml:"message_deletion"`
+	DatabaseCleanup  DatabaseCleanupConfig     `yaml:"database_cleanup"`
+	ScheduledEvents  ScheduledEventsConfig     `yaml:"scheduled_events"`
+	Debug            DebugConfig               `yaml:"debug"`
+	Server           ServerConfig              `yaml:"server"`
+	Webhook          WebhookConfig             `yaml:"webhook"`
+	UpdateProcessing UpdateProcessingConfig    `yaml:"update_processing"`
+	WebUI            WebUIConfig               `yaml:"web_ui"`
+	AI               AzureAIConfig             `yaml:"ai"`
+	UserProfiles     UserProfilesGeneralConfig `yaml:"user_profiles"`
 
 	// Topics is an optional, static forum-topic-name registry. The Telegram
 	// Bot API cannot look up topic names by id, so the bot normally learns them
@@ -161,12 +162,43 @@ type WebhookConfig struct {
 	URL         string `yaml:"url"`
 }
 
+// UpdateProcessingConfig tunes the worker pool that processes inbound Telegram
+// updates. Handlers run synchronously inside each worker, so the moderation
+// decision (recording + the AI moderation call) blocks the worker until it
+// finishes; the slower side features (link summaries, creative replies, message
+// summaries) are already offloaded to a separate background goroutine.
+type UpdateProcessingConfig struct {
+	// Workers is the number of concurrent update-processing workers draining the
+	// Telegram update queue in long-polling mode. Default 1 (in-order processing,
+	// matching the bot's historical behaviour). Raise it to run several moderation
+	// pipelines at once when a busy chat makes updates back up. Has no effect in
+	// webhook mode, where each update is already handled in its own HTTP goroutine.
+	Workers int `yaml:"workers"`
+	// StatsIntervalSeconds controls how often a worker-pool utilization summary is
+	// logged so you can decide whether to change Workers. Defaults to 600 (10 min);
+	// the line is only emitted for windows that actually processed updates. Set a
+	// negative value to disable the logging entirely.
+	StatsIntervalSeconds int `yaml:"stats_interval_seconds"`
+}
+
 // WebUIConfig contains settings for the web administration panel.
 type WebUIConfig struct {
 	Enabled    bool   `yaml:"enabled"`
 	PathPrefix string `yaml:"path_prefix"`
 	Password   string `yaml:"password" web:"sensitive"`
 	OTPEnabled *bool  `yaml:"otp_enabled"`
+	// ModeratorPathPrefix is the URL path prefix for the isolated, limited
+	// moderator web UI (default: /mod). It must differ from PathPrefix. The
+	// moderator surface exposes only moderation/messages/profiles and a
+	// read-only diagnostics view; configuration, logs, system and file/DB
+	// endpoints are never registered under this prefix.
+	ModeratorPathPrefix string `yaml:"moderator_path_prefix"`
+	// PublicURL is the externally-reachable base URL of the web UI (e.g.
+	// https://bot.example.com), without any path prefix. It is used to build
+	// the one-time moderator login link sent over Telegram. When empty, it
+	// falls back to the scheme+host of Webhook.URL (if set); the "Access Web
+	// UI" button is hidden when no public URL can be resolved.
+	PublicURL string `yaml:"public_url"`
 }
 
 // IsOTPEnabled returns whether OTP is enabled (defaults to true if not set).
@@ -278,7 +310,14 @@ type ContentModerationConfig struct {
 	// is unavailable or fails; all the gathered text is judged by the
 	// NewUserProfilePrompt AI prompt. Findings are appended to the user's
 	// profile before AI moderation runs. It does not require content_safety_enabled.
-	NewUserProfileCheckEnabled bool       `yaml:"new_user_profile_check_enabled"`
+	NewUserProfileCheckEnabled bool `yaml:"new_user_profile_check_enabled"`
+	// NewUserProfileUseFullModel makes the new-member profile screening judge
+	// the gathered profile text with the full model instead of the light model.
+	// The full model is better at spotting subtle spam/scam/promo cues in a
+	// profile's name, bio and channel text, at a higher per-call cost. Off by
+	// default (uses the light model). Only affects the AI text verdict; photo
+	// screening still goes through Content Safety / Vision / OCR.space.
+	NewUserProfileUseFullModel bool       `yaml:"new_user_profile_use_full_model"`
 	NewUserProfilePrompt       PromptPair `yaml:"new_user_profile_prompt"`
 	// NewUserWindowHours defines how long after a user's first observed message
 	// they are still considered "new" for moderation purposes. A new user gets
@@ -291,6 +330,15 @@ type ContentModerationConfig struct {
 	// is from a new user (see NewUserWindowHours). Empty by default - the
 	// placeholder expands to nothing until configured.
 	NewUserRules string `yaml:"new_user_rules"`
+	// FullModelFirstMessages double-checks a user's first N messages in a
+	// moderation chat with the full model even when the light model found
+	// nothing. Moderation normally runs the cheap light model first and only
+	// escalates to the full model when the light model flags something; this
+	// catches subtle spam from brand-new members that the light model may miss,
+	// at the cost of one extra full-model call for each of a user's first N
+	// messages. Counted per user per chat from their recorded message history.
+	// 0 (default) disables the double-check.
+	FullModelFirstMessages int `yaml:"full_model_first_messages"`
 	// ReplyContextMaxChars caps the length (in UTF-8 runes, not bytes) of the
 	// quoted "in reply to" text injected into the moderation prompt's
 	// {{reply_to}} placeholder. Longer parent/quoted messages are truncated

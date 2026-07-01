@@ -13,7 +13,9 @@ function diagnosticsPage() {
         bunnyEnv: {},
         chats: [],
         uptimeSeconds: null,
+        moderatorUI: {},
         tokenUsage: { day: '', rows: [], services: [], totals: {} },
+        modStats: { today: '', yesterday: '', day_before: '', rows: [] },
         webhookInfo: null,
         webhookError: '',
         webhookLoading: false,
@@ -34,6 +36,42 @@ function diagnosticsPage() {
         debugRunning: false,
         debugResult: null,      // { system_prompt, user_prompt, response, raw, error, response_time_ms, info }
 
+        // modBase returns the funnel base for a stat in a window: light is a
+        // share of received, full a share of light, and the action rows a share
+        // of full-confirmed. window is one of today/yesterday/day_before/all_time.
+        modBaseFor(stat, window) {
+            const rows = this.modStats.rows || [];
+            const get = (s) => { const r = rows.find(x => x.stat === s); return r ? (r[window] || 0) : 0; };
+            switch (stat) {
+                case 'light_flagged': return get('received');
+                case 'full_confirmed': return get('light_flagged');
+                case 'auto_action':
+                case 'manual_cleared':
+                case 'manual_action': return get('full_confirmed');
+                default: return 0; // received: no percentage
+            }
+        },
+        // modPct formats a stat's count as a percentage of its funnel base.
+        modPct(stat, count, window) {
+            const base = this.modBaseFor(stat, window);
+            if (!base) return '';
+            return (100 * (count || 0) / base).toFixed(1) + '%';
+        },
+        // modLabel maps a funnel stat key to its localized label. Uses literal
+        // t() keys (not a dynamic prefix) so the i18n coverage check sees them.
+        modLabel(stat) {
+            const i18n = Alpine.store('i18n');
+            switch (stat) {
+                case 'received': return i18n.t('modstat_received');
+                case 'light_flagged': return i18n.t('modstat_light_flagged');
+                case 'full_confirmed': return i18n.t('modstat_full_confirmed');
+                case 'auto_action': return i18n.t('modstat_auto_action');
+                case 'manual_cleared': return i18n.t('modstat_manual_cleared');
+                case 'manual_action': return i18n.t('modstat_manual_action');
+                default: return stat;
+            }
+        },
+
         async load() {
             this.loading = true;
             try {
@@ -47,12 +85,16 @@ function diagnosticsPage() {
                 this.bunnyEnv = d.bunny_env || {};
                 this.chats = d.chats || [];
                 this.uptimeSeconds = d.uptime_seconds != null ? d.uptime_seconds : null;
+                this.moderatorUI = d.moderator_ui || {};
                 if (this.telegram.mode === 'webhook') {
                     this.loadWebhookInfo();
                 }
             } catch (e) { console.error(e); }
             try {
                 this.tokenUsage = await apiJSON('/api/tokens');
+            } catch (e) { console.error(e); }
+            try {
+                this.modStats = await apiJSON('/api/modstats');
             } catch (e) { console.error(e); }
             this.loading = false;
         },

@@ -565,15 +565,13 @@ func (b *Bot) generateLinkContentSummary(content, title, targetURL string) (stri
 	return "", fmt.Errorf("all %s models failed to generate link summary", modelType)
 }
 
-// processLinksAndCreativeReply extracts links content first, then processes creative follow-up replies.
-func (b *Bot) processLinksAndCreativeReply(message *tgbotapi.Message, enhancedMessage *tgbotapi.Message) {
-	summariesPosted := b.extractAndStoreLinksContent(message)
-
-	if summariesPosted {
-		log.Printf("Skipping creative reply for message %d - link summaries were posted", message.MessageID)
-		return
-	}
-
+// creativeReply posts a creative follow-up reply to a message that replies to or
+// mentions the bot. moderated reports whether the triggering message was flagged
+// and acted on by content moderation (captured synchronously by the moderate
+// stage); a moderated message never receives a creative reply. The link-summary
+// feature runs first and, when it posts a summary, the creative-reply feature is
+// skipped before this is called (see runCreativeReply).
+func (b *Bot) creativeReply(message *tgbotapi.Message, enhancedMessage *tgbotapi.Message, moderated bool) {
 	isReplyToBot := message.ReplyToMessage != nil && message.ReplyToMessage.From != nil &&
 		message.ReplyToMessage.From.ID == b.botSelf.ID
 
@@ -597,30 +595,32 @@ func (b *Bot) processLinksAndCreativeReply(message *tgbotapi.Message, enhancedMe
 	}
 
 	// Skip the creative reply when the triggering message was itself flagged and
-	// acted on by content moderation. analyzeMessage runs its moderation pass
-	// synchronously before this goroutine is launched, so a flagged message is
-	// already recorded in moderatedMsgs - we don't reward a rule-breaking message
-	// with a friendly reply.
-	if b.wasMessageModerated(message.Chat.ID, message.MessageID) {
+	// acted on by content moderation. The moderate stage runs synchronously
+	// before this goroutine is launched and records the outcome in moderated, so
+	// we don't reward a rule-breaking message with a friendly reply.
+	if moderated {
 		log.Printf("Skipping creative reply for message %d - message was flagged by content moderation", message.MessageID)
 		return
 	}
 
 	// Determine whether this bot-mention routed the message into the reply
 	// moderation/complaint path (handleBotMention -> handleReplyModerationTrigger),
-	// which fires for a mention replying to a message that has text or is
-	// forwarded. A "complaint" is such a mention replying to *another* user's
-	// message; a mention replying to one of the bot's own messages is routed to
-	// moderation too but is not a complaint.
+	// which fires for a mention replying to *another* user's message that has
+	// text or is forwarded. A mention (or reply) targeting one of the bot's OWN
+	// messages is conversation aimed at the bot, not a complaint - handleBotMention
+	// does not route it to moderation, so it must still receive a creative reply
+	// (unless its own content was flagged, already handled by the moderated check).
+	replyTargetIsBot := message.ReplyToMessage != nil && message.ReplyToMessage.From != nil &&
+		message.ReplyToMessage.From.ID == b.botSelf.ID
 	routedToModeration := b.config.IsModerationChat(message.Chat.ID) && isMentioned &&
-		message.ReplyToMessage != nil &&
+		message.ReplyToMessage != nil && !replyTargetIsBot &&
 		(message.ReplyToMessage.Text != "" || message.ForwardFrom != nil)
 	isComplaint := routedToModeration && message.ReplyToMessage.From != nil &&
 		message.ReplyToMessage.From.ID != b.botSelf.ID
 
 	if routedToModeration && !isComplaint {
-		// e.g. a mention replying to one of the bot's own messages: the
-		// moderation path already handled it, so don't also post a creative reply.
+		// A mention replying to a message with no identifiable author is routed
+		// to the moderation path, so don't also post a creative reply.
 		log.Printf("Skipping creative reply for message %d - handled by the moderation path", message.MessageID)
 		return
 	}
@@ -707,7 +707,7 @@ func (b *Bot) extractAndStoreLinksContent(message *tgbotapi.Message) bool {
 					content = summary
 					log.Printf("Summarized Telegram link content (%d chars -> %d chars)", charCount, summaryLen)
 
-					go b.postLinkSummary(message, fmt.Sprintf("https://t.me/%s/%s", channelUsername, messageIDStr), summary, fmt.Sprintf("Telegram @%s/%s", channelUsername, messageIDStr))
+					b.postLinkSummary(message, fmt.Sprintf("https://t.me/%s/%s", channelUsername, messageIDStr), summary, fmt.Sprintf("Telegram @%s/%s", channelUsername, messageIDStr))
 					summariesPosted = true
 				}
 			}
@@ -796,7 +796,7 @@ func (b *Bot) extractAndStoreLinksContent(message *tgbotapi.Message) bool {
 			}
 			log.Printf("Summarized external link content (length: %d chars -> %d chars, title: %s)", utf8.RuneCountInString(content), summaryLen, title)
 			if b.config.AI.Enabled && b.config.AI.LinkSummaries.Enabled {
-				go b.postLinkSummary(message, targetURL, summary, title)
+				b.postLinkSummary(message, targetURL, summary, title)
 				summariesPosted = true
 			}
 			b.clearMessageReaction(message.Chat.ID, message.MessageID)

@@ -108,29 +108,30 @@ type Moderator interface {
 
 // apiHandler groups dependencies used by all API routes.
 type apiHandler struct {
-	config       *config.Config
-	configFile   string
-	configFromDB bool // true when config source is DB (no config file at startup)
-	db           *database.DB
-	auth         *AuthManager
-	pathPrefix   string
-	diagnostics  *DiagnosticsTracker
-	apiTester    ExternalAPITester
-	chatNames    ChatNameResolver
-	chatLister   ChatLister
-	topicNames   TopicNameResolver
-	moderator    Moderator
-	restartFunc  func(mode string)       // called to restart the bot process
-	sendOTP      func(code string) error // sends OTP to super-admin via Telegram
-	logBuffer    *LogBuffer
-	startedAt    time.Time
-	version      string
-	gitCommit    string
-	buildTime    string
-	botURL       string
-	botName      string
-	botAuthor    string
-	botLicense   string
+	config              *config.Config
+	configFile          string
+	configFromDB        bool // true when config source is DB (no config file at startup)
+	db                  *database.DB
+	auth                *AuthManager
+	pathPrefix          string
+	moderatorPathPrefix string // cookie path / link prefix for the moderator UI
+	diagnostics         *DiagnosticsTracker
+	apiTester           ExternalAPITester
+	chatNames           ChatNameResolver
+	chatLister          ChatLister
+	topicNames          TopicNameResolver
+	moderator           Moderator
+	restartFunc         func(mode string)       // called to restart the bot process
+	sendOTP             func(code string) error // sends OTP to super-admin via Telegram
+	logBuffer           *LogBuffer
+	startedAt           time.Time
+	version             string
+	gitCommit           string
+	buildTime           string
+	botURL              string
+	botName             string
+	botAuthor           string
+	botLicense          string
 }
 
 // resolveChatName returns the chat title for the given chat ID, or "" if no resolver is configured.
@@ -514,10 +515,21 @@ func (h *apiHandler) handleGetActions(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if n, err := strconv.Atoi(offsetStr); err == nil && n > 0 {
+			offset = n
+		}
+	}
 
-	actions, err := h.db.GetRecentActionsEnriched(limit)
+	actions, err := h.db.GetRecentActionsEnrichedPaged(limit, offset)
 	if err != nil {
 		writeWebErrf(w, errGetActionsFailed, "failed to get actions: %v", err)
+		return
+	}
+	total, err := h.db.CountActions()
+	if err != nil {
+		writeWebErrf(w, errGetActionsFailed, "failed to count actions: %v", err)
 		return
 	}
 
@@ -529,10 +541,23 @@ func (h *apiHandler) handleGetActions(w http.ResponseWriter, r *http.Request) {
 	for i, a := range actions {
 		enriched[i] = actionWithChat{ActionEnriched: a, ChatName: h.resolveChatName(a.ChatID)}
 	}
-	jsonResponse(w, enriched)
+	jsonResponse(w, map[string]any{"actions": enriched, "total": total})
 }
 
 func (h *apiHandler) handleGetMutedUsers(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if n, err := strconv.Atoi(offsetStr); err == nil && n > 0 {
+			offset = n
+		}
+	}
+
 	users, err := h.db.GetActiveMutedUsers()
 	if err != nil {
 		writeWebErrf(w, errGetMutedFailed, "failed to get muted users: %v", err)
@@ -550,7 +575,17 @@ func (h *apiHandler) handleGetMutedUsers(w http.ResponseWriter, r *http.Request)
 	sort.Slice(enriched, func(i, j int) bool {
 		return enriched[i].MutedAt.After(enriched[j].MutedAt)
 	})
-	jsonResponse(w, enriched)
+	total := len(enriched)
+	// Apply pagination over the in-memory (cache-derived) slice.
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	page := enriched[offset:end]
+	jsonResponse(w, map[string]any{"users": page, "total": total})
 }
 
 // ── Messages ──

@@ -3,7 +3,6 @@
 package bot
 
 import (
-	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -14,12 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These scenarios pin down how the creative-reply path (processLinksAndCreativeReply)
+// These scenarios pin down how the creative-reply path (creativeReply)
 // coordinates with content moderation:
 //   - a creative-reply trigger (reply to a bot message or a bot mention) whose
 //     own message was flagged by moderation must NOT receive a friendly reply;
-//   - a mention replying to one of the bot's own messages is routed to the
-//     moderation path and must NOT also produce a creative reply;
+//   - a mention replying to one of the bot's own messages is conversation aimed
+//     at the bot (not a complaint about another user), so it still receives a
+//     creative reply once moderation has cleared it;
 //   - a genuine complaint (mention replying to *another* user's message) still
 //     receives a creative reply - the cross-model re-moderation that ran first
 //     (synchronously, in handleBotMention) is reflected in its chain context;
@@ -53,26 +53,31 @@ func TestCreativeReply_SkipsWhenMessageFlaggedByModeration(t *testing.T) {
 	// trigger) but has already been actioned by content moderation.
 	msg := testMessage(-100, 7, 100, "you are dumb")
 	msg.ReplyToMessage = testMessage(-100, b.botSelf.ID, 50, "bot said something")
-	b.moderatedMsgs[fmt.Sprintf("%d_%d", msg.Chat.ID, msg.MessageID)] = time.Now()
 
-	b.processLinksAndCreativeReply(msg, msg)
+	// moderated=true: the moderate stage flagged and actioned this message.
+	b.creativeReply(msg, msg, true)
 
 	assert.Empty(t, tg.SentMessages, "a flagged message must not receive a creative reply")
 }
 
-// A bot mention replying to one of the bot's own messages is routed to the
-// moderation path (handleReplyModerationTrigger) and must not also produce a
-// creative reply.
-func TestCreativeReply_SkipsReplyToBotWithMention(t *testing.T) {
-	b, tg := newMockBot(t)
+// A bot mention replying to one of the bot's own messages is conversation aimed
+// at the bot (not a complaint about another user). Once moderation has cleared
+// the message it must still receive a creative reply, matching the owner's
+// intent that the bot answers (and claps back at) messages addressed to it.
+func TestCreativeReply_ReplyToBotWithMentionGeneratesReply(t *testing.T) {
+	b, tg, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"a witty reply"}}]}`))
+	})
 	creativeModerationConfig(b)
 
 	msg := testMessage(-100, 7, 100, "@testbot what do you think")
 	msg.ReplyToMessage = testMessage(-100, b.botSelf.ID, 50, "bot said something")
 
-	b.processLinksAndCreativeReply(msg, msg)
+	b.creativeReply(msg, msg, false)
 
-	assert.Empty(t, tg.SentMessages, "a mention replying to the bot is handled by the moderation path, not a creative reply")
+	require.Len(t, tg.SentMessages, 1, "a mention replying to the bot is conversation aimed at the bot and must receive a creative reply")
+	assert.Equal(t, 100, tg.SentMessages[0].ReplyToMessageID)
+	assert.Contains(t, tg.SentMessages[0].Text, "a witty reply")
 }
 
 // A genuine complaint (mention replying to another user's message) still
@@ -87,7 +92,7 @@ func TestCreativeReply_ComplaintStillGeneratesReply(t *testing.T) {
 	msg := testMessage(-100, 9, 100, "@testbot look at this")
 	msg.ReplyToMessage = testMessage(-100, 7, 55, "the reported message")
 
-	b.processLinksAndCreativeReply(msg, msg)
+	b.creativeReply(msg, msg, false)
 
 	require.Len(t, tg.SentMessages, 1, "a complaint must still receive a creative reply")
 	assert.Equal(t, int64(-100), tg.SentMessages[0].ChatID)
@@ -106,7 +111,7 @@ func TestCreativeReply_PlainReplyToBotGeneratesReply(t *testing.T) {
 	msg := testMessage(-100, 7, 100, "thanks for that")
 	msg.ReplyToMessage = testMessage(-100, b.botSelf.ID, 50, "bot said something")
 
-	b.processLinksAndCreativeReply(msg, msg)
+	b.creativeReply(msg, msg, false)
 
 	require.Len(t, tg.SentMessages, 1, "an ordinary reply to the bot must still receive a creative reply")
 	assert.Equal(t, 100, tg.SentMessages[0].ReplyToMessageID)

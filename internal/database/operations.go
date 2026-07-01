@@ -609,10 +609,28 @@ func (db *DB) RecordIncomingMessage(info *MessageInfo, opts IncomingMessageOpts)
 		}()
 
 		// 1. message_info
+		//
+		// Upsert instead of INSERT OR REPLACE. Telegram long-polling can deliver
+		// the same (message_id, chat_id) twice, and handlers run serially, so a
+		// duplicate delivery re-enters this path *after* an earlier pass may have
+		// written annotation columns via dedicated UPDATEs
+		// (moderation_reason, reactions, extra_info). INSERT OR REPLACE deletes
+		// the existing row and re-inserts it carrying the *empty* annotations of a
+		// freshly-received message, silently wiping a moderation verdict an
+		// earlier pass already saved. The ON CONFLICT clause refreshes only the
+		// volatile message content and leaves those annotations untouched.
 		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO message_info
+			`INSERT INTO message_info
 			 (message_id, chat_id, user_id, username, text, reply_to_message_id, timestamp, extra_info, message_thread_id, quote_text, reactions, moderation_reason)
-			 VALUES (?, ?, ?, ?, ?, ?, datetime(?), ?, ?, ?, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, datetime(?), ?, ?, ?, ?, ?)
+			 ON CONFLICT(message_id, chat_id) DO UPDATE SET
+			     user_id = excluded.user_id,
+			     username = excluded.username,
+			     text = excluded.text,
+			     reply_to_message_id = excluded.reply_to_message_id,
+			     timestamp = excluded.timestamp,
+			     message_thread_id = excluded.message_thread_id,
+			     quote_text = excluded.quote_text`,
 			info.MessageID, info.ChatID, info.UserID, info.Username, info.Text,
 			info.ReplyToMessageID, info.Timestamp.Format(time.RFC3339), info.ExtraInfo, info.MessageThreadID, info.QuoteText, info.Reactions, info.ModerationReason,
 		); err != nil {
@@ -726,9 +744,21 @@ func (db *DB) CountUserMessagesInChat(userID, chatID int64) (int, error) {
 
 // StoreMessageInfo stores message information for later moderation use with retry logic
 func (db *DB) StoreMessageInfo(info *MessageInfo) error {
-	query := `INSERT OR REPLACE INTO message_info 
+	// Upsert rather than INSERT OR REPLACE so a re-store of an already-tracked
+	// (message_id, chat_id) does not blank the annotation columns
+	// (moderation_reason, reactions, extra_info) that are written separately
+	// after the initial insert. See RecordIncomingMessage for the full rationale.
+	query := `INSERT INTO message_info 
 		(message_id, chat_id, user_id, username, text, reply_to_message_id, timestamp, extra_info, message_thread_id, quote_text, reactions, moderation_reason) 
-		VALUES (?, ?, ?, ?, ?, ?, datetime(?), ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, datetime(?), ?, ?, ?, ?, ?)
+		ON CONFLICT(message_id, chat_id) DO UPDATE SET
+			user_id = excluded.user_id,
+			username = excluded.username,
+			text = excluded.text,
+			reply_to_message_id = excluded.reply_to_message_id,
+			timestamp = excluded.timestamp,
+			message_thread_id = excluded.message_thread_id,
+			quote_text = excluded.quote_text`
 
 	return db.retryOnTransientError(func() error {
 		_, err := db.conn.Exec(query, info.MessageID, info.ChatID, info.UserID,
@@ -906,13 +936,23 @@ type ActionEnriched struct {
 
 // GetRecentActionsEnriched returns recent actions with message text from message_info.
 func (db *DB) GetRecentActionsEnriched(limit int) ([]ActionEnriched, error) {
+	return db.GetRecentActionsEnrichedPaged(limit, 0)
+}
+
+// GetRecentActionsEnrichedPaged returns a page of recent actions (newest first)
+// with message text from message_info attached. offset skips the given number
+// of most-recent rows, enabling server-side pagination for the Web UI.
+func (db *DB) GetRecentActionsEnrichedPaged(limit, offset int) ([]ActionEnriched, error) {
+	if offset < 0 {
+		offset = 0
+	}
 	query := `SELECT a.user_id, a.username, a.admin_id, a.admin_name, a.action_type, a.duration, a.reason,
 		a.chat_id, a.message_id, a.timestamp, COALESCE(m.text, '') as message_text, COALESCE(m.moderation_reason, '') as moderation_reason
 		FROM actions a
 		LEFT JOIN message_info m ON a.message_id = m.message_id AND a.chat_id = m.chat_id
-		ORDER BY a.timestamp DESC LIMIT ?`
+		ORDER BY a.timestamp DESC LIMIT ? OFFSET ?`
 
-	rows, err := db.conn.Query(query, limit)
+	rows, err := db.conn.Query(query, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -932,6 +972,17 @@ func (db *DB) GetRecentActionsEnriched(limit int) ([]ActionEnriched, error) {
 	}
 
 	return actions, nil
+}
+
+// CountActions returns the total number of moderation action rows, used to
+// drive Web UI pagination of the recent-actions list.
+func (db *DB) CountActions() (int, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM actions").Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // MessageInfoEnriched is a MessageInfo with moderation action details attached.

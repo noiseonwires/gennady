@@ -28,21 +28,26 @@ func TestHandleGetActions_Empty(t *testing.T) {
 	h := newTestHandler(t, newTestConfig())
 	rr := get(t, h, h.handleGetActions, "/api/actions")
 	assert.Equal(t, http.StatusOK, rr.Code)
-	var out []any
-	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
-	assert.Empty(t, out)
+	body := decodeJSONBody(t, rr)
+	assert.Equal(t, float64(0), body["total"])
+	assert.Empty(t, body["actions"])
 }
 
 func TestHandleGetActions_WithLimit(t *testing.T) {
 	h := newTestHandler(t, newTestConfig())
-	rr := get(t, h, h.handleGetActions, "/api/actions?limit=10")
+	rr := get(t, h, h.handleGetActions, "/api/actions?limit=10&offset=20")
 	assert.Equal(t, http.StatusOK, rr.Code)
+	body := decodeJSONBody(t, rr)
+	assert.Contains(t, body, "total")
 }
 
 func TestHandleGetMutedUsers_Empty(t *testing.T) {
 	h := newTestHandler(t, newTestConfig())
 	rr := get(t, h, h.handleGetMutedUsers, "/api/muted")
 	assert.Equal(t, http.StatusOK, rr.Code)
+	body := decodeJSONBody(t, rr)
+	assert.Equal(t, float64(0), body["total"])
+	assert.Empty(t, body["users"])
 }
 
 func TestHandleGetMessages_Empty(t *testing.T) {

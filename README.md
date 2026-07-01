@@ -134,6 +134,10 @@ SSH:
 - **Config & data transfer:** download/upload the config file, environment variables, or the
   SQLite database; migrate config from a file into the database and back.
 - **One-click restart.**
+- **Isolated moderator UI:** give moderators a separate, restricted panel (its own URL prefix)
+  with moderation, messages, profiles and read-only diagnostics — no config, logs or system
+  access. Moderators get in via a one-time login link + OTP they request from the bot's
+  `/start` menu; no shared super-admin credentials.
 
 ### ⚙️ Deployment & data
 

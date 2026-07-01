@@ -3,7 +3,9 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
+	"html"
 	"log"
 	"os"
 	"strconv"
@@ -246,6 +248,7 @@ func (b *Bot) handleWarningAction(query *tgbotapi.CallbackQuery, parts []string)
 	if err != nil {
 		log.Printf("Error logging action: %v", err)
 	}
+	b.recordManualModStat(int64(query.From.ID), "warn")
 
 	// Send notification to admin chat with link to original message
 	var threadIDPtr *int
@@ -361,6 +364,7 @@ func (b *Bot) handleMuteAction(query *tgbotapi.CallbackQuery, parts []string) {
 	if err != nil {
 		log.Printf("Error logging action: %v", err)
 	}
+	b.recordManualModStat(int64(query.From.ID), "mute")
 
 	// Send notification to admin chat with link to original message
 	var threadIDPtr *int
@@ -525,6 +529,7 @@ func (b *Bot) handleMuteConfirmed(query *tgbotapi.CallbackQuery, parts []string)
 	if err != nil {
 		log.Printf("Error logging action: %v", err)
 	}
+	b.recordManualModStat(int64(query.From.ID), "mute")
 
 	// Send notification to admin chat with link to original message
 	var threadIDPtr *int
@@ -689,6 +694,9 @@ func (b *Bot) handleAdminAction(query *tgbotapi.CallbackQuery, parts []string) {
 	case "top10_bad_users":
 		log.Printf("Executing top10_bad_users action")
 		b.handleAdminTop10BadUsers(query)
+	case "stats":
+		log.Printf("Executing stats action")
+		b.handleAdminStats(query)
 	case "punish":
 		log.Printf("Executing punish action")
 		b.handleAdminPunish(query)
@@ -701,6 +709,9 @@ func (b *Bot) handleAdminAction(query *tgbotapi.CallbackQuery, parts []string) {
 	case "web_otp":
 		log.Printf("Executing web_otp action")
 		b.handleAdminWebOTP(query)
+	case "mod_web":
+		log.Printf("Executing mod_web action")
+		b.handleAdminModWebUI(query)
 	default:
 		log.Printf("Unknown admin sub-action: %s", subAction)
 	}
@@ -737,21 +748,179 @@ func (b *Bot) handleAdminWebOTP(query *tgbotapi.CallbackQuery) {
 	b.tg.AnswerCallback(query.ID, i18n.T("webui.otp_sent"))
 }
 
+// handleAdminModWebUI mints a one-time login link + OTP for the isolated,
+// limited moderator web UI and delivers them privately to the requesting
+// moderator. Available to any admin (super-admin or live chat-admin). The link
+// token rides in the URL fragment so it never reaches the server's request log;
+// it is useless without the separately delivered OTP.
+func (b *Bot) handleAdminModWebUI(query *tgbotapi.CallbackQuery) {
+	// Defence in depth: the menu is only shown to admins, but re-check before
+	// issuing credentials.
+	if !b.isUserAdmin(query.From.ID) {
+		log.Printf("SECURITY: non-admin user %d attempted moderator web login", query.From.ID)
+		b.tg.AnswerCallback(query.ID, i18n.T("webui.mod_not_allowed"))
+		return
+	}
+
+	if b.generateModeratorLogin == nil {
+		b.tg.AnswerCallback(query.ID, i18n.T("webui.not_enabled"))
+		return
+	}
+
+	publicURL := b.effectivePublicURL()
+	if publicURL == "" {
+		log.Printf("Moderator web login requested but no public URL is configured (web_ui.public_url or webhook.url)")
+		b.tg.AnswerCallback(query.ID, i18n.T("webui.mod_no_public_url"))
+		return
+	}
+
+	modPrefix := strings.TrimRight(strings.TrimSpace(b.config.WebUI.ModeratorPathPrefix), "/")
+	if modPrefix == "" {
+		modPrefix = "/mod"
+	}
+
+	token, otp := b.generateModeratorLogin(query.From.ID)
+	link := publicURL + modPrefix + "/#t=" + token
+
+	// Deliver the link and the OTP as two separate Telegram messages, always to
+	// the moderator's PRIVATE chat (query.From.ID), never the group the button
+	// was tapped in — so a single leaked message only exposes one of the two
+	// required factors and nothing sensitive lands in the shared chat. The link
+	// goes first; the code lands as the most recent message, ready to paste once
+	// the page prompts for it. HTML parse mode (not Markdown) is used because
+	// the configured URL/prefix may legitimately contain characters such as "_"
+	// that legacy Markdown would mis-parse as formatting; the dynamic values are
+	// HTML-escaped to stay safe.
+	if _, err := b.tg.SendMessage(telegram.SendMessageParams{
+		ChatID:    query.From.ID,
+		Text:      i18n.Tf("webui.mod_link_text", html.EscapeString(link)),
+		ParseMode: telegram.ParseModeHTML,
+	}); err != nil {
+		b.answerModLoginSendError(query, err)
+		return
+	}
+	if _, err := b.tg.SendMessage(telegram.SendMessageParams{
+		ChatID:    query.From.ID,
+		Text:      i18n.Tf("webui.mod_otp_text", html.EscapeString(otp)),
+		ParseMode: telegram.ParseModeHTML,
+	}); err != nil {
+		b.answerModLoginSendError(query, err)
+		return
+	}
+
+	log.Printf("🛡️  Moderator Web UI login link issued to admin %d", query.From.ID)
+	b.tg.AnswerCallback(query.ID, i18n.T("webui.mod_link_sent"))
+}
+
+// answerModLoginSendError reports a failure to deliver the moderator login
+// link/OTP via the callback toast. The common case when the button is tapped
+// from a group chat is that the moderator has never opened a private chat with
+// the bot (or blocked it), so Telegram returns 403 Forbidden; surface a clear
+// instruction to start the bot privately rather than a generic error.
+func (b *Bot) answerModLoginSendError(query *tgbotapi.CallbackQuery, err error) {
+	log.Printf("Error sending moderator web login to admin %d: %v", query.From.ID, err)
+	var apiErr *telegram.APIError
+	if errors.As(err, &apiErr) && apiErr.Code == 403 {
+		b.tg.AnswerCallback(query.ID, i18n.T("webui.mod_dm_required"))
+		return
+	}
+	b.tg.AnswerCallback(query.ID, i18n.T("webui.otp_failed"))
+}
+
+// buildBunnyNetSection returns a Markdown-formatted section listing the BunnyNet
+// Magic Containers environment variables that are set, or "" when none are present.
+// Intended for super-admin eyes only (deployment diagnostics).
+func buildBunnyNetSection() string {
+	var envLines []string
+	for _, key := range []string{"BUNNYNET_MC_APPID", "BUNNYNET_MC_PODID", "BUNNYNET_MC_REGION"} {
+		if v := os.Getenv(key); v != "" {
+			envLines = append(envLines, fmt.Sprintf("`%s`: `%s`", key, v))
+		}
+	}
+	if len(envLines) == 0 {
+		return ""
+	}
+	return "\n\n🐰 *BunnyNet:*\n" + strings.Join(envLines, "\n")
+}
+
+// handleAdminStats shows the moderation funnel counters (received → light →
+// full → auto/manual) for today / yesterday / day before / all time. Numbers
+// after "received" carry a percentage relative to received messages.
+func (b *Bot) handleAdminStats(query *tgbotapi.CallbackQuery) {
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	dayBefore := now.AddDate(0, 0, -2).Format("2006-01-02")
+
+	rows, err := b.db.GetModerationStats(today, yesterday, dayBefore)
+	if err != nil {
+		log.Printf("Error getting moderation stats: %v", err)
+		b.editMessageText(query.Message, i18n.T("stats.empty"))
+		return
+	}
+
+	byStat := make(map[string]database.ModerationStatBuckets, len(rows))
+	for _, r := range rows {
+		byStat[r.Stat] = r
+	}
+	received := byStat[database.ModStatReceived]
+	if received.Today == 0 && received.Yesterday == 0 && received.DayBefore == 0 && received.AllTime == 0 {
+		b.editMessageText(query.Message, i18n.T("stats.empty"))
+		return
+	}
+
+	cell := func(v int64, base int64, withPct bool) string {
+		if withPct && base > 0 {
+			return fmt.Sprintf("%d (%.0f%%)", v, 100*float64(v)/float64(base))
+		}
+		return fmt.Sprintf("%d", v)
+	}
+	// Funnel-relative: each stage's % is of the previous stage. base buckets
+	// supply the denominator per window (light→received, full→light, actions→full).
+	line := func(s, base database.ModerationStatBuckets, withPct bool) string {
+		return fmt.Sprintf("%s / %s / %s / %s",
+			cell(s.Today, base.Today, withPct),
+			cell(s.Yesterday, base.Yesterday, withPct),
+			cell(s.DayBefore, base.DayBefore, withPct),
+			cell(s.AllTime, base.AllTime, withPct))
+	}
+
+	light := byStat[database.ModStatLightFlagged]
+	full := byStat[database.ModStatFullConfirmed]
+
+	var text strings.Builder
+	text.WriteString(i18n.T("stats.title"))
+	text.WriteString("\n")
+	text.WriteString(i18n.Tf("stats.received", line(received, received, false)) + "\n")
+	text.WriteString(i18n.Tf("stats.light", line(light, received, true)) + "\n")
+	text.WriteString(i18n.Tf("stats.full", line(full, light, true)) + "\n")
+	text.WriteString(i18n.Tf("stats.auto", line(byStat[database.ModStatAutoAction], full, true)) + "\n")
+	text.WriteString(i18n.Tf("stats.cleared", line(byStat[database.ModStatManualCleared], full, true)) + "\n")
+	text.WriteString(i18n.Tf("stats.manual", line(byStat[database.ModStatManualAction], full, true)))
+
+	backKeyboard := telegram.NewKeyboard(
+		telegram.NewRow(
+			telegram.NewButton(i18n.T("btn.back"), "admin_menu"),
+		),
+	)
+	if _, err := b.tg.EditMessageText(telegram.EditMessageTextParams{
+		ChatID:    query.Message.Chat.ID,
+		MessageID: query.Message.MessageID,
+		Text:      text.String(),
+		ParseMode: telegram.ParseModeMarkdown,
+		Keyboard:  &backKeyboard,
+	}); err != nil {
+		log.Printf("Error showing moderation stats: %v", err)
+	}
+}
+
 // handleAdminAbout shows bot information
 func (b *Bot) handleAdminAbout(query *tgbotapi.CallbackQuery) {
 	aboutText := "ℹ️ " + b.buildAboutText()
 
 	// Append BunnyNet environment info for super admin
 	if b.config.Admin.SuperAdminUserID != 0 && query.From.ID == b.config.Admin.SuperAdminUserID {
-		var envLines []string
-		for _, key := range []string{"BUNNYNET_MC_APPID", "BUNNYNET_MC_PODID", "BUNNYNET_MC_REGION"} {
-			if v := os.Getenv(key); v != "" {
-				envLines = append(envLines, fmt.Sprintf("`%s`: `%s`", key, v))
-			}
-		}
-		if len(envLines) > 0 {
-			aboutText += "\n\n🐰 *BunnyNet:*\n" + strings.Join(envLines, "\n")
-		}
+		aboutText += buildBunnyNetSection()
 	}
 
 	backKeyboard := telegram.NewKeyboard(
@@ -927,12 +1096,17 @@ func (b *Bot) handleAdminTop10BadUsers(query *tgbotapi.CallbackQuery) {
 
 // handleAdminMenu shows the admin menu
 func (b *Bot) handleAdminMenu(query *tgbotapi.CallbackQuery) {
-	keyboard := telegram.NewKeyboard(
+	rows := [][]telegram.InlineButton{
 		telegram.NewRow(telegram.NewButton(i18n.T("btn.view_muted"), "admin_muted_users")),
 		telegram.NewRow(telegram.NewButton(i18n.T("btn.view_actions"), "admin_last_actions")),
+		telegram.NewRow(telegram.NewButton(i18n.T("btn.stats"), "admin_stats")),
 		telegram.NewRow(telegram.NewButton(i18n.T("btn.punish"), "admin_punish")),
-		telegram.NewRow(telegram.NewButton(i18n.T("btn.about"), "admin_about")),
-	)
+	}
+	if b.moderatorWebLoginAvailable() {
+		rows = append(rows, telegram.NewRow(telegram.NewButton(i18n.T("btn.access_web_ui"), "admin_mod_web")))
+	}
+	rows = append(rows, telegram.NewRow(telegram.NewButton(i18n.T("btn.about"), "admin_about")))
+	keyboard := telegram.NewKeyboard(rows...)
 
 	menuText := i18n.Tf("menu.admin_text", BotName)
 
@@ -1025,6 +1199,7 @@ func (b *Bot) handleDeleteAction(query *tgbotapi.CallbackQuery, parts []string) 
 	if err != nil {
 		log.Printf("Error logging action: %v", err)
 	}
+	b.recordManualModStat(int64(query.From.ID), "delete")
 
 	// Send notification to admin chat with link reference
 	var threadIDPtr *int
@@ -1236,6 +1411,7 @@ func (b *Bot) handleNotBadAction(query *tgbotapi.CallbackQuery, parts []string) 
 	if err != nil {
 		log.Printf("Error logging clear action: %v", err)
 	}
+	b.recordManualModStat(int64(query.From.ID), "cleared")
 
 	// Send notification to admin chat
 	adminNotification := i18n.Tf("notbad.admin_notify", username, adminName)

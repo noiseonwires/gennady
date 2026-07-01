@@ -90,7 +90,10 @@ type Bot struct {
 	diagnostics    APICallRecorder
 	telegramStatus TelegramStatusReporter
 	generateWebOTP func() string
-	httpMux        *http.ServeMux
+	// generateModeratorLogin mints a one-time moderator web UI login bound to a
+	// Telegram user ID, returning the link token and OTP to deliver privately.
+	generateModeratorLogin func(userID int64) (token, otp string)
+	httpMux                *http.ServeMux
 
 	forcedGC bool // explicit GC after each event, enabled via FORCED_GC env
 
@@ -112,6 +115,20 @@ type Bot struct {
 
 	// Bounded, TTL'd in-memory cache of user profiles for moderation prompts.
 	profileCache *userProfileCache
+
+	// Built-once pipeline definitions (the ordered stages and the side-feature
+	// registry). Rebuilding them per message would allocate ~10 method-value
+	// closures and 2 slices every message; caching removes that churn.
+	stagesOnce  sync.Once
+	stagesCache []stage
+	featOnce    sync.Once
+	featCache   []feature
+
+	// updateWorkers is the resolved number of synchronous update-processing
+	// workers (long-polling mode). metrics tracks how busy that pool is so the
+	// operator can tell when to raise it.
+	updateWorkers int
+	metrics       workerMetrics
 }
 
 // SetBuildInfo sets the build metadata displayed in the About screen.
@@ -134,6 +151,12 @@ func (b *Bot) SetTelegramStatusReporter(r TelegramStatusReporter) {
 // SetWebOTPGenerator sets the function that generates web UI OTP codes.
 func (b *Bot) SetWebOTPGenerator(fn func() string) {
 	b.generateWebOTP = fn
+}
+
+// SetModeratorLoginGenerator sets the function that mints a one-time moderator
+// web UI login (link token + OTP) bound to a Telegram user ID.
+func (b *Bot) SetModeratorLoginGenerator(fn func(userID int64) (token, otp string)) {
+	b.generateModeratorLogin = fn
 }
 
 // SendOTPToSuperAdmin sends an OTP code to the super-admin user via Telegram.
@@ -231,6 +254,12 @@ func New(cfg *config.Config, db *database.DB) (*Bot, error) {
 		profileCache:  newUserProfileCache(),
 	}
 
+	// Resolve the update-processing worker count (defaults guarantee >= 1, but
+	// tests may construct a Config without running setDefaults).
+	bot.updateWorkers = cfg.UpdateProcessing.Workers
+	if bot.updateWorkers < 1 {
+		bot.updateWorkers = 1
+	}
 	var api *tgbot.Bot
 	if cfg.BotToken != "" {
 		opts := []tgbot.Option{
@@ -240,6 +269,11 @@ func New(cfg *config.Config, db *database.DB) (*Bot, error) {
 			// Run handlers synchronously in the polling worker so updates are
 			// processed in order, matching the previous library's behaviour.
 			tgbot.WithNotAsyncHandlers(),
+		}
+		// With more than one worker, updates are processed concurrently (ordered
+		// only per worker). 1 is the library default, so only set it when raised.
+		if bot.updateWorkers > 1 {
+			opts = append(opts, tgbot.WithWorkers(bot.updateWorkers))
 		}
 		if cfg.Debug.DebugTelegram || cfg.Webhook.Debug {
 			opts = append(opts, tgbot.WithDebug())

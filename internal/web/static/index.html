@@ -82,6 +82,27 @@
                 </div>
             </template>
 
+            <!-- Moderator OTP Step (one-time link opened; enter the OTP) -->
+            <template x-if="$store.auth.step === 'mod_otp'">
+                <div>
+                    <p x-text="$store.i18n.t('login_mod_otp_subtitle')">Enter the verification code sent to your Telegram</p>
+                    <input type="text" maxlength="6" placeholder="000000" autocomplete="off" autofocus inputmode="numeric" pattern="[0-9]*"
+                           x-model="$store.auth.otpCode"
+                           @keydown.enter="$store.auth.submitModOTP()"
+                           @input="$store.auth.otpCode.trim().length >= 6 && $store.auth.submitModOTP()">
+                    <button x-text="$store.i18n.t('login_verify_btn')" @click="$store.auth.submitModOTP()">Verify</button>
+                </div>
+            </template>
+
+            <!-- Moderator: no/expired one-time token in the link -->
+            <template x-if="$store.auth.step === 'mod_no_token'">
+                <div>
+                    <p class="login-error" x-text="$store.i18n.t('login_mod_no_token')">
+                        This login link is missing or has expired. Open the bot, tap "Access Web UI" and use the fresh link.
+                    </p>
+                </div>
+            </template>
+
             <div class="login-error" x-text="$store.auth.loginError"></div>
             <div class="login-source">AGPL-3.0 · <a href="https://github.com/noiseonwires/gennady" target="_blank" rel="noopener">Source Code</a></div>
         </div>
@@ -95,7 +116,7 @@
 
         <nav class="sidebar" :class="{ open: $store.app.sidebarOpen }">
             <h2><img src="logo.png" alt="" class="sidebar-logo" width="28" height="28"><span>Gennady</span></h2>
-            <template x-for="nav in $store.app.navItems" :key="nav.page">
+            <template x-for="nav in $store.app.visibleNavItems" :key="nav.page">
                 <a href="#" :class="{ active: $store.app.page === nav.page }"
                    @click.prevent="$store.app.navigate(nav.page)">
                     <span x-text="nav.icon + ' '"></span>
@@ -131,12 +152,12 @@
 
                 <div class="card">
                     <h3 x-text="$store.i18n.t('mod_actions')"></h3>
-                    <template x-if="actions.length === 0 && !loading">
+                    <template x-if="actionsTotal === 0 && !loading">
                         <div x-text="$store.i18n.t('mod_no_actions')"></div>
                     </template>
                     <template x-if="actions.length > 0">
                         <div class="table-wrap">
-                            <table>
+                            <table class="stacked-table">
                                 <thead><tr>
                                     <th x-text="$store.i18n.t('mod_user')"></th>
                                     <th x-text="$store.i18n.t('mod_admin')"></th>
@@ -149,16 +170,16 @@
                                 <tbody>
                                     <template x-for="a in actions" :key="a.user_id + '-' + a.timestamp">
                                         <tr>
-                                            <td x-text="a.username || String(a.user_id)"></td>
-                                            <td x-text="a.admin_name || String(a.admin_id)"></td>
-                                            <td>
+                                            <td :data-label="$store.i18n.t('mod_user')" x-text="a.username || String(a.user_id)"></td>
+                                            <td :data-label="$store.i18n.t('mod_admin')" x-text="a.admin_name || String(a.admin_id)"></td>
+                                            <td :data-label="$store.i18n.t('mod_action')">
                                                 <span class="badge"
                                                       :class="(a.action_type==='mute' || a.action_type==='cmute') ? 'badge-red' : a.action_type==='warn' ? 'badge-yellow' : 'badge-green'"
                                                       x-text="a.action_type"></span>
                                             </td>
-                                            <td x-text="a.duration ? a.duration + 'm' : '-'"></td>
-                                            <td x-text="a.reason || '-'"></td>
-                                            <td>
+                                            <td :data-label="$store.i18n.t('mod_duration')" x-text="a.duration ? a.duration + 'm' : '-'"></td>
+                                            <td :data-label="$store.i18n.t('mod_reason')" x-text="a.reason || '-'"></td>
+                                            <td :data-label="$store.i18n.t('mod_message')">
                                                 <template x-if="a.message_text">
                                                     <span class="msg-preview-trigger" @click="showMsgPopup = a" :title="a.message_text">💬</span>
                                                 </template>
@@ -166,23 +187,37 @@
                                                     <span>-</span>
                                                 </template>
                                             </td>
-                                            <td x-text="fmtTime(a.timestamp)"></td>
+                                            <td :data-label="$store.i18n.t('mod_time')" x-text="fmtTime(a.timestamp)"></td>
                                         </tr>
                                     </template>
                                 </tbody>
                             </table>
                         </div>
                     </template>
+                    <template x-if="actionsTotal > limit">
+                        <div class="msg-pager">
+                            <span x-text="$store.i18n.t('msg_total') + ': ' + actionsTotal"></span>
+                            <template x-if="actionsOffset > 0">
+                                <button @click="changeActionsPage(-1)" x-text="'« ' + $store.i18n.t('msg_prev')"></button>
+                            </template>
+                            <template x-for="(pg, idx) in actionsPageNumbers" :key="idx">
+                                <button class="pager-page" :class="pg === actionsPage ? 'active' : ''" :disabled="typeof pg !== 'number'" @click="goActionsPage(pg)" x-text="pg"></button>
+                            </template>
+                            <template x-if="actionsOffset + limit < actionsTotal">
+                                <button @click="changeActionsPage(1)" x-text="$store.i18n.t('msg_next') + ' »'"></button>
+                            </template>
+                        </div>
+                    </template>
                 </div>
 
                 <div class="card">
                     <h3 x-text="$store.i18n.t('mod_muted')"></h3>
-                    <template x-if="muted.length === 0 && !loading">
+                    <template x-if="mutedTotal === 0 && !loading">
                         <div x-text="$store.i18n.t('mod_no_muted')"></div>
                     </template>
                     <template x-if="muted.length > 0">
                         <div class="table-wrap">
-                            <table>
+                            <table class="stacked-table">
                                 <thead><tr>
                                     <th x-text="$store.i18n.t('mod_user')"></th>
                                     <th x-text="$store.i18n.t('mod_chat')"></th>
@@ -195,12 +230,12 @@
                                 <tbody>
                                     <template x-for="m in muted" :key="m.user_id + '-' + m.chat_id">
                                         <tr>
-                                            <td x-text="m.username || String(m.user_id)"></td>
-                                            <td><span x-text="m.chat_name || String(m.chat_id)" :title="String(m.chat_id)"></span></td>
-                                            <td x-text="fmtTime(m.muted_at)"></td>
-                                            <td x-text="m.unmute_at && m.unmute_at !== '0001-01-01T00:00:00Z' ? fmtTime(m.unmute_at) : '∞'"></td>
-                                            <td x-text="m.reason || '-'"></td>
-                                            <td>
+                                            <td :data-label="$store.i18n.t('mod_user')" x-text="m.username || String(m.user_id)"></td>
+                                            <td :data-label="$store.i18n.t('mod_chat')"><span x-text="m.chat_name || String(m.chat_id)" :title="String(m.chat_id)"></span></td>
+                                            <td :data-label="$store.i18n.t('mod_muted_at')" x-text="fmtTime(m.muted_at)"></td>
+                                            <td :data-label="$store.i18n.t('mod_unmute_at')" x-text="m.unmute_at && m.unmute_at !== '0001-01-01T00:00:00Z' ? fmtTime(m.unmute_at) : '∞'"></td>
+                                            <td :data-label="$store.i18n.t('mod_reason')" x-text="m.reason || '-'"></td>
+                                            <td :data-label="$store.i18n.t('mod_message')">
                                                 <template x-if="m.message_id && m.message_id > 0">
                                                     <span class="msg-preview-trigger" @click="showMuteMsg(m)" title="View message">💬</span>
                                                 </template>
@@ -208,13 +243,27 @@
                                                     <span>-</span>
                                                 </template>
                                             </td>
-                                            <td>
+                                            <td :data-label="$store.i18n.t('mod_action')">
                                                 <button class="mod-btn mod-btn-unmute" @click="unmuteUser(m)" :title="$store.i18n.t('mod_btn_unmute')">🔊</button>
                                             </td>
                                         </tr>
                                     </template>
                                 </tbody>
                             </table>
+                        </div>
+                    </template>
+                    <template x-if="mutedTotal > limit">
+                        <div class="msg-pager">
+                            <span x-text="$store.i18n.t('msg_total') + ': ' + mutedTotal"></span>
+                            <template x-if="mutedOffset > 0">
+                                <button @click="changeMutedPage(-1)" x-text="'« ' + $store.i18n.t('msg_prev')"></button>
+                            </template>
+                            <template x-for="(pg, idx) in mutedPageNumbers" :key="idx">
+                                <button class="pager-page" :class="pg === mutedPage ? 'active' : ''" :disabled="typeof pg !== 'number'" @click="goMutedPage(pg)" x-text="pg"></button>
+                            </template>
+                            <template x-if="mutedOffset + limit < mutedTotal">
+                                <button @click="changeMutedPage(1)" x-text="$store.i18n.t('msg_next') + ' »'"></button>
+                            </template>
                         </div>
                     </template>
                 </div>
@@ -289,20 +338,34 @@
                                                       x-text="m.action_type"></span>
                                             </template>
                                         </span>
-                                        <span style="display:flex;align-items:center;gap:.5rem">
+                                        <span class="msg-card-head-right">
                                             <span class="msg-card-time" x-text="fmtTime(m.timestamp)"></span>
-                                            <span class="mod-menu" x-data="{ open: false }" @click.outside="open=false">
-                                                <button class="mod-btn mod-btn-toggle" @click="open = !open" :title="$store.i18n.t('mod_btn_actions')">⋯</button>
-                                                <span class="mod-menu-popup" x-show="open" x-cloak x-transition.opacity>
-                                                    <button class="mod-btn mod-btn-warn" @click="modMsg(m, 'warn'); open=false" :title="$store.i18n.t('mod_btn_warn')">⚠️</button>
-                                                    <button class="mod-btn mod-btn-mute" @click="modMsg(m, 'mute'); open=false" :title="$store.i18n.t('mod_btn_mute')">🔇</button>
-                                                    <button class="mod-btn mod-btn-cmute" @click="modMsg(m, 'cmute'); open=false" :title="$store.i18n.t('mod_btn_cmute')">😈</button>
-                                                    <button class="mod-btn mod-btn-unmute" @click="modMsg(m, 'unmute'); open=false" :title="$store.i18n.t('mod_btn_unmute')">🔊</button>
-                                                    <button class="mod-btn mod-btn-delete-chat" @click="deleteMsgFromChat(m); open=false" :title="$store.i18n.t('msg_delete_chat')">🗑️</button>
-                                                    <button class="mod-btn mod-btn-remoderate" @click="modMsg(m, 'remoderate'); open=false" :title="$store.i18n.t('mod_btn_remoderate')">🔁</button>
+                                            <span class="msg-actions" x-data="{ open: false }" @click.outside="open = false" @keydown.escape="open = false">
+                                                <button class="msg-actions-toggle" :class="open ? 'open' : ''" @click="open = !open" :aria-expanded="open" :aria-label="$store.i18n.t('mod_btn_actions')" :title="$store.i18n.t('mod_btn_actions')">🛡️</button>
+                                                <span class="msg-actions-menu" x-show="open" x-cloak x-transition.opacity @click="open = false">
+                                                    <button class="msg-action-item act-warn" @click="modMsg(m, 'warn')">
+                                                        <span class="msg-action-ico">⚠️</span><span x-text="$store.i18n.t('mod_btn_warn')"></span>
+                                                    </button>
+                                                    <button class="msg-action-item act-mute" @click="modMsg(m, 'mute')">
+                                                        <span class="msg-action-ico">🔇</span><span x-text="$store.i18n.t('mod_btn_mute')"></span>
+                                                    </button>
+                                                    <button class="msg-action-item act-cmute" @click="modMsg(m, 'cmute')">
+                                                        <span class="msg-action-ico">😈</span><span x-text="$store.i18n.t('mod_btn_cmute')"></span>
+                                                    </button>
+                                                    <button class="msg-action-item act-unmute" @click="modMsg(m, 'unmute')">
+                                                        <span class="msg-action-ico">🔊</span><span x-text="$store.i18n.t('mod_btn_unmute')"></span>
+                                                    </button>
+                                                    <button class="msg-action-item act-remoderate" @click="modMsg(m, 'remoderate')">
+                                                        <span class="msg-action-ico">🔁</span><span x-text="$store.i18n.t('mod_btn_remoderate')"></span>
+                                                    </button>
+                                                    <button class="msg-action-item act-delete-chat" @click="deleteMsgFromChat(m)">
+                                                        <span class="msg-action-ico">🗑️</span><span x-text="$store.i18n.t('msg_delete_chat')"></span>
+                                                    </button>
+                                                    <button class="msg-action-item act-delete" @click="deleteMsg(m)">
+                                                        <span class="msg-action-ico">&#x2715;</span><span x-text="$store.i18n.t('msg_delete')"></span>
+                                                    </button>
                                                 </span>
                                             </span>
-                                            <button class="msg-delete-btn" @click="deleteMsg(m)" :title="$store.i18n.t('msg_delete')">&#x2715;</button>
                                         </span>
                                     </div>
                                     <div class="msg-card-meta">
@@ -526,7 +589,7 @@
             <!-- Diagnostics Page -->
             <div x-show="$store.app.page === 'diagnostics'" x-data="diagnosticsPage()" x-effect="if ($store.auth.loggedIn && $store.app.page === 'diagnostics') load()">
                 <h1 x-text="$store.i18n.t('diag_title')"></h1>
-                <div class="notice notice-tip" x-text="$store.i18n.t('diag_debug_tip')"></div>
+                <div class="notice notice-tip" x-show="!$store.app.isModerator" x-text="$store.i18n.t('diag_debug_tip')"></div>
 
                 <template x-if="loading">
                     <div class="upload-status"><span class="upload-spinner"></span><span x-text="$store.i18n.t('loading')"></span></div>
@@ -567,6 +630,27 @@
                         </template>
                     </div>
                 </div>
+
+                <!-- Moderator Web UI (super-admin view only) -->
+                <template x-if="!$store.app.isModerator && moderatorUI && moderatorUI.path_prefix">
+                    <div class="card" :style="'border-left:4px solid var(' + (moderatorUI.available ? '--green' : '--yellow') + ')'">
+                        <h3>🛡️ <span x-text="$store.i18n.t('diag_mod_ui')"></span></h3>
+                        <div class="diag-detail" style="line-height:1.8">
+                            <span x-text="$store.i18n.t('diag_mod_ui_prefix') + ': '"></span><strong x-text="moderatorUI.path_prefix"></strong><br>
+                            <template x-if="moderatorUI.available">
+                                <span>
+                                    <span x-text="$store.i18n.t('diag_mod_ui_url') + ': '"></span><a :href="moderatorUI.url" target="_blank" rel="noopener" x-text="moderatorUI.url"></a>
+                                    <template x-if="moderatorUI.public_url_source === 'webhook'">
+                                        <small style="opacity:.7" x-text="' (' + $store.i18n.t('diag_mod_ui_from_webhook') + ')'"></small>
+                                    </template>
+                                </span>
+                            </template>
+                            <template x-if="!moderatorUI.available">
+                                <span style="color:var(--yellow)" x-text="$store.i18n.t('diag_mod_ui_no_url')"></span>
+                            </template>
+                        </div>
+                    </div>
+                </template>
 
                 <!-- Webhook Info (from Telegram API) -->
                 <template x-if="telegram.mode === 'webhook'">
@@ -731,15 +815,43 @@
                                         <span x-text="$store.i18n.t('diag_never')"></span>
                                     </template>
                                 </div>
-                                <button class="test-btn" @click="testSvc(m.service_key)"
+                                <button class="test-btn" x-show="!$store.app.isModerator" @click="testSvc(m.service_key)"
                                     :disabled="testingKey === m.service_key"
                                     x-text="testingKey === m.service_key ? $store.i18n.t('diag_testing') : $store.i18n.t('diag_test')"></button>
-                                <button class="test-btn" style="margin-left:.4rem"
+                                <button class="test-btn" x-show="!$store.app.isModerator" style="margin-left:.4rem"
                                     @click="openDebug('moderation', m.service_key, (m.type === 'light' ? 'Light' : 'Full') + ' #' + (m.index + 1) + ': ' + m.deployment)"
                                     x-text="$store.i18n.t('diag_debug')"></button>
                             </div>
                         </template>
                     </div>
+                </template>
+
+                <!-- Moderation funnel -->
+                <h2 x-text="$store.i18n.t('diag_modstats')"></h2>
+                <template x-if="!modStats.rows || modStats.rows.length === 0">
+                    <div x-text="$store.i18n.t('diag_no_data')"></div>
+                </template>
+                <template x-if="modStats.rows && modStats.rows.length > 0">
+                    <table>
+                        <thead><tr>
+                            <th x-text="$store.i18n.t('diag_modstat_metric')"></th>
+                            <th x-text="$store.i18n.t('diag_modstat_today')"></th>
+                            <th x-text="$store.i18n.t('diag_modstat_yesterday')"></th>
+                            <th x-text="$store.i18n.t('diag_modstat_daybefore')"></th>
+                            <th x-text="$store.i18n.t('diag_modstat_alltime')"></th>
+                        </tr></thead>
+                        <tbody>
+                            <template x-for="s in modStats.rows" :key="s.stat">
+                                <tr>
+                                    <td x-text="modLabel(s.stat)"></td>
+                                    <td><span x-text="(s.today || 0).toLocaleString()"></span><small x-show="s.stat !== 'received' && modPct(s.stat,s.today,'today')" style="opacity:.6" x-text="' (' + modPct(s.stat,s.today,'today') + ')'"></small></td>
+                                    <td><span x-text="(s.yesterday || 0).toLocaleString()"></span><small x-show="s.stat !== 'received' && modPct(s.stat,s.yesterday,'yesterday')" style="opacity:.6" x-text="' (' + modPct(s.stat,s.yesterday,'yesterday') + ')'"></small></td>
+                                    <td><span x-text="(s.day_before || 0).toLocaleString()"></span><small x-show="s.stat !== 'received' && modPct(s.stat,s.day_before,'day_before')" style="opacity:.6" x-text="' (' + modPct(s.stat,s.day_before,'day_before') + ')'"></small></td>
+                                    <td><span x-text="(s.all_time || 0).toLocaleString()"></span><small x-show="s.stat !== 'received' && modPct(s.stat,s.all_time,'all_time')" style="opacity:.6" x-text="' (' + modPct(s.stat,s.all_time,'all_time') + ')'"></small></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
                 </template>
 
                 <!-- Token Usage -->
@@ -816,15 +928,15 @@
                                     <span x-text="$store.i18n.t('diag_never')"></span>
                                 </template>
                             </div>
-                            <button class="test-btn" @click="testSvc(svc.key)"
+                            <button class="test-btn" x-show="!$store.app.isModerator" @click="testSvc(svc.key)"
                                 :disabled="testingKey === svc.key"
                                 x-text="testingKey === svc.key ? $store.i18n.t('diag_testing') : $store.i18n.t('diag_test')"></button>
-                            <template x-if="isExtractorService(svc.key)">
+                            <template x-if="!$store.app.isModerator && isExtractorService(svc.key)">
                                 <button class="test-btn" style="margin-left:.4rem"
                                     @click="openDebug('extract', svc.key, svc.label)"
                                     x-text="$store.i18n.t('diag_debug')"></button>
                             </template>
-                            <template x-if="isOCRService(svc.key)">
+                            <template x-if="!$store.app.isModerator && isOCRService(svc.key)">
                                 <button class="test-btn" style="margin-left:.4rem"
                                     @click="openDebug('ocr', svc.key, svc.label)"
                                     x-text="$store.i18n.t('diag_debug')"></button>
@@ -834,7 +946,7 @@
                 </div>
 
                 <!-- Debug popup: moderation prompt / URL extraction -->
-                <template x-if="debugOpen">
+                <template x-if="debugOpen && !$store.app.isModerator">
                     <div class="msg-popup-overlay" @click.self="closeDebug()">
                         <div class="msg-popup" style="width: min(95vw, 800px)">
                             <div class="msg-popup-header">
