@@ -91,25 +91,25 @@ type MessageForDeletion struct {
 
 // MessageInfo represents information about a message for moderation
 type MessageInfo struct {
-	MessageID        int       `json:"message_id"`
-	ChatID           int64     `json:"chat_id"`
-	UserID           int64     `json:"user_id"`
-	Username         string    `json:"username"`
-	Text             string    `json:"text"`
-	ReplyToMessageID *int      `json:"reply_to_message_id"`
+	MessageID        int    `json:"message_id"`
+	ChatID           int64  `json:"chat_id"`
+	UserID           int64  `json:"user_id"`
+	Username         string `json:"username"`
+	Text             string `json:"text"`
+	ReplyToMessageID *int   `json:"reply_to_message_id"`
 	// MessageThreadID is the forum topic id the message belongs to (0 = main
 	// area). Persisted so deferred flows (restore, web re-moderation) that no
 	// longer have the live update can still target the correct topic.
-	MessageThreadID  int       `json:"message_thread_id"`
+	MessageThreadID int `json:"message_thread_id"`
 	// QuoteText is the precise span the sender highlighted when replying (empty
 	// when they replied without selecting a sub-quote). Used to give AI context
 	// the exact quoted fragment instead of the whole parent message.
-	QuoteText        string    `json:"quote_text"`
+	QuoteText string `json:"quote_text"`
 	// Reactions is the emoji→count map for the message, stored as JSON
 	// (e.g. {"\ud83d\udc4d":3}). Empty when there are no reactions.
-	Reactions        string    `json:"reactions"`
-	Timestamp        time.Time `json:"timestamp"`
-	ExtraInfo        string    `json:"extra_info"` // Extracted content from links (Telegram posts, external websites)
+	Reactions string    `json:"reactions"`
+	Timestamp time.Time `json:"timestamp"`
+	ExtraInfo string    `json:"extra_info"` // Extracted content from links (Telegram posts, external websites)
 	// ModerationReason holds the AI moderation verdict's explanation (the
 	// "decision details" lines the model emits after the trigger line) for the
 	// message. Populated whenever AI moderation fires on the message; empty
@@ -143,10 +143,10 @@ type Action struct {
 
 // UserProfile represents an AI-generated user behavior profile
 type UserProfile struct {
-	UserID     int64     `json:"user_id"`
-	Username   string    `json:"username"`
-	Profile    string    `json:"profile"`
-	Reputation string    `json:"reputation"` // "bad", "neutral", "good"
+	UserID     int64  `json:"user_id"`
+	Username   string `json:"username"`
+	Profile    string `json:"profile"`
+	Reputation string `json:"reputation"` // "bad", "neutral", "good"
 	// TgProfileAnalysis holds the new-member Telegram profile screening results
 	// (AI / vision / content-safety sub-checks that triggered), one finding per
 	// line. Kept separate from the AI-generated behavior `Profile` so the two
@@ -430,7 +430,9 @@ func (db *DB) createTables() error {
 		`CREATE TABLE IF NOT EXISTS web_sessions (
 			token TEXT PRIMARY KEY,
 			created_at DATETIME NOT NULL,
-			expires_at DATETIME NOT NULL
+			expires_at DATETIME NOT NULL,
+			actor_id INTEGER NOT NULL DEFAULT 0,
+			actor_name TEXT NOT NULL DEFAULT ''
 		)`,
 		// Per-service, per-model, per-day AI token usage counters. Daily figures
 		// are derived from the row whose day_date matches the current day;
@@ -464,6 +466,15 @@ func (db *DB) createTables() error {
 			name TEXT NOT NULL,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (chat_id, thread_id)
+		)`,
+		// Last reported state of every watched page (see WebsiteWatchConfig).
+		// content is the extracted plain text each new fetch is diffed against.
+		`CREATE TABLE IF NOT EXISTS website_snapshots (
+			url TEXT NOT NULL PRIMARY KEY,
+			content TEXT NOT NULL,
+			content_hash TEXT NOT NULL,
+			changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 	}
 
@@ -591,6 +602,8 @@ func (db *DB) ensureSchemaColumns() error {
 		{"user_profiles", "tg_profile_analysis", "ADD COLUMN tg_profile_analysis TEXT NOT NULL DEFAULT ''"},
 		{"user_profiles", "first_seen_at", "ADD COLUMN first_seen_at DATETIME NOT NULL DEFAULT ''"},
 		{"warnings", "warning_message_id", "ADD COLUMN warning_message_id INTEGER NOT NULL DEFAULT 0"},
+		{"web_sessions", "actor_id", "ADD COLUMN actor_id INTEGER NOT NULL DEFAULT 0"},
+		{"web_sessions", "actor_name", "ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''"},
 	}
 
 	for _, m := range migrations {

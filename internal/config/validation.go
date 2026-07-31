@@ -53,6 +53,69 @@ func (c *Config) Validate() error {
 	if err := c.validatePostToDestinations(); err != nil {
 		errs = append(errs, err)
 	}
+	if err := c.validateBackup(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.validateNightMode(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// validateBackup checks that an enabled backup task has a usable destination.
+// It only rejects settings that would make every backup run fail; connectivity
+// problems surface at run time.
+func (c *Config) validateBackup() error {
+	if !c.Backup.Enabled {
+		return nil
+	}
+	var errs []error
+	switch strings.ToLower(strings.TrimSpace(c.Backup.Target)) {
+	case "", "local":
+		if strings.TrimSpace(c.Backup.LocalPath) == "" {
+			errs = append(errs, fmt.Errorf("backup.local_path is required for backup.target=local"))
+		}
+	case "webdav":
+		if strings.TrimSpace(c.Backup.WebDAV.URL) == "" {
+			errs = append(errs, fmt.Errorf("backup.webdav.url is required for backup.target=webdav"))
+		}
+	case "bunny":
+		if strings.TrimSpace(c.Backup.Bunny.StorageZone) == "" {
+			errs = append(errs, fmt.Errorf("backup.bunny.storage_zone is required for backup.target=bunny"))
+		}
+		if strings.TrimSpace(c.Backup.Bunny.AccessKey) == "" {
+			errs = append(errs, fmt.Errorf("backup.bunny.access_key is required for backup.target=bunny"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("backup.target %q is not supported (use local, webdav or bunny)", c.Backup.Target))
+	}
+	return errors.Join(errs...)
+}
+
+// validateNightMode checks the night-mode window when the feature is enabled.
+// Bad values would silently disable the window, so they are surfaced at load
+// time instead of failing open.
+func (c *Config) validateNightMode() error {
+	if !c.NightMode.Enabled {
+		return nil
+	}
+	var errs []error
+	start, okStart := clockMinutes(c.NightMode.StartTime)
+	if !okStart {
+		errs = append(errs, fmt.Errorf("night_mode.start_time %q is not a valid HH:MM time", c.NightMode.StartTime))
+	}
+	end, okEnd := clockMinutes(c.NightMode.EndTime)
+	if !okEnd {
+		errs = append(errs, fmt.Errorf("night_mode.end_time %q is not a valid HH:MM time", c.NightMode.EndTime))
+	}
+	if okStart && okEnd && start == end {
+		errs = append(errs, fmt.Errorf("night_mode.start_time and night_mode.end_time must differ"))
+	}
+	for _, d := range c.NightMode.Days {
+		if _, ok := nightModeWeekdays[strings.ToLower(strings.TrimSpace(d))]; !ok {
+			errs = append(errs, fmt.Errorf("night_mode.days: %q is not a valid weekday (use e.g. monday/mon)", d))
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -73,6 +136,9 @@ func (c *Config) validatePostToDestinations() error {
 	check("ai.daily_summary.post_to", c.AI.DailySummary.PostTo)
 	for i := range c.AI.Rss.Feeds {
 		check(fmt.Sprintf("ai.rss.feeds[%d].post_to", i), c.AI.Rss.Feeds[i].PostTo)
+	}
+	for i := range c.AI.WebsiteWatch.Sites {
+		check(fmt.Sprintf("ai.website_watch.sites[%d].post_to", i), c.AI.WebsiteWatch.Sites[i].PostTo)
 	}
 	return errors.Join(errs...)
 }
@@ -224,6 +290,14 @@ func (c *AzureAIConfig) CollectPromptWarnings() []string {
 		}
 	}
 
+	anyWatchEnabled := false
+	for _, s := range c.WebsiteWatch.Sites {
+		if s.Enabled {
+			anyWatchEnabled = true
+			break
+		}
+	}
+
 	checks := []check{
 		{c.ContentModeration.Enabled, "content_moderation", []PromptPair{c.ContentModeration.Prompt, c.ContentModeration.WarningPrompt}},
 		{c.CreativeReplies.Enabled, "creative_replies", []PromptPair{c.CreativeReplies.Prompt}},
@@ -234,6 +308,7 @@ func (c *AzureAIConfig) CollectPromptWarnings() []string {
 		{c.LinkSummaries.Enabled || c.MorningGreeting.Enabled, "translation_prompt", []PromptPair{c.TranslationPrompt}},
 		{anyRssEnabled, "rss (translation_prompt)", []PromptPair{c.Rss.TranslationPrompt}},
 		{anyRssEnabled, "rss (summary_prompt)", []PromptPair{c.Rss.SummaryPrompt}},
+		{anyWatchEnabled, "website_watch", []PromptPair{c.WebsiteWatch.Prompt}},
 	}
 
 	for _, ch := range checks {

@@ -43,6 +43,11 @@ func (b *Bot) handleMessage(message *tgbotapi.Message, isEdited bool) {
 	// Check if bot is mentioned
 	if b.isBotMentioned(message) {
 		b.handleBotMention(message)
+	} else if message.ReplyToMessage != nil && message.ReplyToMessage.From != nil &&
+		message.ReplyToMessage.From.ID == b.botSelf.ID {
+		// Replying to the bot with a link to a message of this chat reports that
+		// linked message, exactly like mentioning the bot does.
+		b.handleLinkModerationTrigger(message)
 	}
 
 	// Handle admin chat
@@ -141,8 +146,15 @@ func (b *Bot) handleBotMention(message *tgbotapi.Message) {
 			log.Printf("   💬 Chat ID: %d", message.ReplyToMessage.Chat.ID)
 			log.Printf("   👤 Original sender: %s (ID: %d)", message.ReplyToMessage.From.Username, message.ReplyToMessage.From.ID)
 			log.Printf("   📄 Message type: service message or topic root - ignoring")
+			b.handleLinkModerationTrigger(message)
 			return
 		}
+	}
+
+	// A mention that isn't a reply complaint still reports a message when it
+	// links to one of this chat's messages.
+	if b.handleLinkModerationTrigger(message) {
+		return
 	}
 
 	if b.config.IsModerationChat(message.Chat.ID) && !b.isUserAdmin(message.From.ID) {

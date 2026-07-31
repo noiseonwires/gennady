@@ -23,7 +23,9 @@ type Config struct {
 	Admin            AdminConfig               `yaml:"admin"`
 	Moderation       ModerationConfig          `yaml:"moderation"`
 	MessageDeletion  MessageDeletionConfig     `yaml:"message_deletion"`
+	NightMode        NightModeConfig           `yaml:"night_mode"`
 	DatabaseCleanup  DatabaseCleanupConfig     `yaml:"database_cleanup"`
+	Backup           BackupConfig              `yaml:"backup"`
 	ScheduledEvents  ScheduledEventsConfig     `yaml:"scheduled_events"`
 	Debug            DebugConfig               `yaml:"debug"`
 	Server           ServerConfig              `yaml:"server"`
@@ -118,6 +120,38 @@ type MessageDeletionConfig struct {
 	CleanupIntervalHours       int           `yaml:"cleanup_interval_hours"`
 }
 
+// NightModeConfig configures scheduled "quiet hours". While the window is
+// active, every new message in the covered (chat, topic) pairs is deleted on
+// arrival - without being analyzed or stored - and the bot replies to each with
+// a short notice that is itself removed after ReplyDeleteSeconds.
+type NightModeConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// StartTime / EndTime bound the window in 24-hour "HH:MM" form. When EndTime
+	// is earlier than StartTime the window wraps midnight (e.g. 23:00-08:00).
+	StartTime string `yaml:"start_time"`
+	EndTime   string `yaml:"end_time"`
+	// Days restricts night mode to specific weekdays, identified by the day the
+	// quiet period STARTS on: an overnight 23:00-08:00 window listed for "fri"
+	// runs Fri 23:00 through Sat 08:00. Tokens are case-insensitive and accept
+	// the full name or a 3-letter abbreviation (monday/mon, tuesday/tue, ...).
+	// An empty list means every day.
+	Days []string `yaml:"days"`
+	// Message is the reply notice text. When empty a built-in phrase is used.
+	Message string `yaml:"message"`
+	// MutedMessage is the reply notice sent to a user who was just auto-muted
+	// for exceeding MuteAfterMessages. When empty a built-in phrase is used.
+	MutedMessage string `yaml:"muted_message"`
+	// ReplyDeleteSeconds is how long the notice stays before it is removed.
+	// Defaults to 5 when unset (<= 0).
+	ReplyDeleteSeconds int `yaml:"reply_delete_seconds"`
+	// MuteAfterMessages auto-mutes a user until the end of the current night-mode
+	// window once they post MORE than this many messages while the window is
+	// active. 0 (default) disables the auto-mute; messages are still deleted.
+	MuteAfterMessages int           `yaml:"mute_after_messages"`
+	IncludedTopics    ChatTopicList `yaml:"included_topics"`
+	ExcludedTopics    ChatTopicList `yaml:"excluded_topics"`
+}
+
 // DatabaseCleanupConfig contains settings for periodic database record purging.
 type DatabaseCleanupConfig struct {
 	CleanupIntervalHours  int `yaml:"cleanup_interval_hours"`
@@ -128,6 +162,61 @@ type DatabaseCleanupConfig struct {
 	// warning or an active mute, so they aren't purged by the retention sweep
 	// until the related warning is cleaned up or the mute expires/is lifted.
 	PreserveWarnedMutedMessages bool `yaml:"preserve_warned_muted_messages"`
+}
+
+// BackupConfig configures the periodic database backup task. When enabled, the
+// bot snapshots the active database into a single SQLite file every
+// IntervalHours and copies it to the configured Target, replacing the previous
+// backup.
+type BackupConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// IntervalHours is how often the backup runs (e.g. 48 = every two days).
+	IntervalHours int `yaml:"interval_hours"`
+	// FilePrefix is prepended to the "moderation.db" file name so several bot
+	// instances can back up to the same folder/zone without colliding.
+	// Characters outside [A-Za-z0-9._-] are replaced with "_".
+	FilePrefix string `yaml:"file_prefix"`
+	// IncludeConfig controls whether the config_values table (which holds
+	// secrets when the DB is the config source) is part of the backup.
+	IncludeConfig bool `yaml:"include_config"`
+	// NotifyOnFailure DMs the super-admin (admin.super_admin_user_id) when a
+	// scheduled backup fails, with the error details. Independent of
+	// admin.notify_startup.
+	NotifyOnFailure bool `yaml:"notify_super_admin_on_failure"`
+	// TempDir is where the intermediate snapshot is written. Defaults to the
+	// directory of database.path.
+	TempDir string `yaml:"temp_dir"`
+	// Target selects the destination: "local", "webdav" or "bunny".
+	Target string `yaml:"target"`
+	// LocalPath is the destination folder for target "local".
+	LocalPath string             `yaml:"local_path"`
+	WebDAV    WebDAVBackupConfig `yaml:"webdav"`
+	Bunny     BunnyBackupConfig  `yaml:"bunny"`
+}
+
+// WebDAVBackupConfig describes a WebDAV collection to upload backups into.
+type WebDAVBackupConfig struct {
+	// URL is the full collection URL, e.g.
+	// https://cloud.example.com/remote.php/dav/files/user/backups
+	URL      string `yaml:"url"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password" web:"sensitive"`
+}
+
+// BunnyBackupConfig describes a bunny.net Edge Storage zone to upload backups
+// into. See https://docs.bunny.net/api-reference/storage.
+type BunnyBackupConfig struct {
+	// Endpoint is the storage hostname for the zone's primary region, e.g.
+	// storage.bunnycdn.com (Frankfurt, default), ny.storage.bunnycdn.com,
+	// la.storage.bunnycdn.com, uk/se/br/jh/sg/syd.storage.bunnycdn.com.
+	Endpoint string `yaml:"endpoint"`
+	// StorageZone is the storage zone name.
+	StorageZone string `yaml:"storage_zone"`
+	// AccessKey is the storage zone password (FTP & API Access tab), NOT the
+	// account-level API key.
+	AccessKey string `yaml:"access_key" web:"sensitive"`
+	// Path is an optional folder inside the zone; it is created on demand.
+	Path string `yaml:"path"`
 }
 
 // ScheduledEventsConfig contains settings for missed scheduled event recovery.
@@ -239,6 +328,7 @@ type AzureAIConfig struct {
 	LinkSummaries     LinkSummariesConfig     `yaml:"link_summaries"`
 	ExternalData      ExternalDataConfig      `yaml:"external_data"`
 	Rss               RssConfig               `yaml:"rss"`
+	WebsiteWatch      WebsiteWatchConfig      `yaml:"website_watch"`
 	UserProfiles      UserProfilesConfig      `yaml:"user_profiles"`
 
 	TranslationPrompt PromptPair `yaml:"translation_prompt,omitempty"`
@@ -504,6 +594,44 @@ func (f *RssFeed) IsSummarizeIfLong() bool {
 		return true
 	}
 	return *f.SummarizeIfLong
+}
+
+// WebsiteWatchConfig contains the website change-monitoring settings: an
+// RSS-like watcher for pages that publish no feed. Each site is fetched on its
+// own schedule, converted to text, diffed against the last reported snapshot
+// and the diff is handed to the AI, which either describes the change or
+// answers with NoChangesMarker (nothing is posted then).
+type WebsiteWatchConfig struct {
+	UseFullModel        bool          `yaml:"use_full_model"`
+	LightModelThreshold int           `yaml:"light_model_threshold"`
+	// MaxContentLength caps the extracted page text (in UTF-8 runes) that is
+	// stored and compared. Defaults to 8192.
+	MaxContentLength int `yaml:"max_content_length"`
+	// MaxDiffLength caps the diff (in UTF-8 runes) handed to the AI. Defaults to 4096.
+	MaxDiffLength int `yaml:"max_diff_length"`
+	// NoChangesMarker is the exact answer the AI is told to return when the diff
+	// carries no meaningful update (ads, counters, timestamps). A reply equal to
+	// this marker - or an empty reply - suppresses the post. Defaults to NO_CHANGES.
+	NoChangesMarker string        `yaml:"no_changes_marker"`
+	Sites           []WatchedSite `yaml:"sites"`
+	Prompt          PromptPair    `yaml:"prompt"`
+}
+
+// WatchedSite configures a single monitored page.
+//
+// Schedule: IntervalHours takes precedence; when it is 0 the page is checked
+// daily at Time (HH:MM). A site with neither set is never scheduled.
+//
+// PostTo selects where change reports are published. When empty, they are
+// broadcast to every moderation chat in its main area.
+type WatchedSite struct {
+	Name             string        `yaml:"name" json:"name"`
+	URL              string        `yaml:"url" json:"url"`
+	Enabled          bool          `yaml:"enabled" json:"enabled"`
+	Time             string        `yaml:"time" json:"time"`
+	IntervalHours    int           `yaml:"interval_hours" json:"interval_hours"`
+	PostTo           ChatTopicList `yaml:"post_to" json:"post_to"`
+	MaxMessageLength int           `yaml:"max_message_length" json:"max_message_length"`
 }
 
 // PromptPair contains system and user prompts for a single AI task.

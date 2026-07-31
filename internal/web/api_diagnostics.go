@@ -146,6 +146,9 @@ func (h *apiHandler) handleGetDiagnostics(w http.ResponseWriter, r *http.Request
 	}
 	var models []modelInfo
 	for i, m := range h.config.AI.LightModel.Configs {
+		if !m.IsEnabled() {
+			continue
+		}
 		models = append(models, modelInfo{
 			Type:       "light",
 			Index:      i,
@@ -155,6 +158,9 @@ func (h *apiHandler) handleGetDiagnostics(w http.ResponseWriter, r *http.Request
 		})
 	}
 	for i, m := range h.config.AI.FullModel.Configs {
+		if !m.IsEnabled() {
+			continue
+		}
 		models = append(models, modelInfo{
 			Type:       "full",
 			Index:      i,
@@ -167,7 +173,8 @@ func (h *apiHandler) handleGetDiagnostics(w http.ResponseWriter, r *http.Request
 	// Scheduled events
 	events, _ := h.db.GetAllScheduledEvents()
 
-	zone, _ := time.Now().Zone()
+	now := time.Now()
+	zone, _ := now.Zone()
 
 	// Collect BunnyNet environment info
 	bunnyEnv := map[string]string{}
@@ -205,6 +212,7 @@ func (h *apiHandler) handleGetDiagnostics(w http.ResponseWriter, r *http.Request
 		"prompt_warnings":  h.config.AI.CollectPromptWarnings(),
 		"scheduled_events": events,
 		"server_timezone":  zone,
+		"server_time":      now.Format("2006-01-02 15:04:05 -07:00"),
 		"telegram":         h.diagnostics.GetTelegramStatus(),
 		"bunny_env":        bunnyEnv,
 		"chats":            chats,

@@ -644,6 +644,19 @@ func parsePublicTelegramMessageLink(text string) (username string, messageID int
 	return username, messageID, topicID, true
 }
 
+// sameChatMessageLinkTarget returns the id of the message a t.me link in text
+// points at, but only when that link targets chat itself. Private links carry
+// the chat id, public ones the chat username, so no API call is needed.
+func sameChatMessageLinkTarget(text string, chat tgbotapi.Chat) (int, bool) {
+	if messageID, linkChatID, _, ok := parseTelegramMessageLink(text); ok {
+		return messageID, linkChatID == chat.ID
+	}
+	if username, messageID, _, ok := parsePublicTelegramMessageLink(text); ok {
+		return messageID, chat.Username != "" && strings.EqualFold(username, chat.Username)
+	}
+	return 0, false
+}
+
 // resolveChatIDByUsername resolves a public chat username to a chat ID via Telegram API.
 // Works for any public chat type (supergroups, channels). Regular groups cannot have usernames.
 func (b *Bot) resolveChatIDByUsername(username string) (int64, error) {

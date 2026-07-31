@@ -98,7 +98,17 @@ func (b *Bot) notifySuperAdminMarkdown(text string) {
 // sendSuperAdminNotice is the shared best-effort DM path for super-admin notices,
 // gated by admin.notify_startup and a configured super-admin user id.
 func (b *Bot) sendSuperAdminNotice(text string, parseMode telegram.ParseMode) {
-	if !b.config.Admin.NotifyStartup || b.config.Admin.SuperAdminUserID == 0 {
+	if !b.config.Admin.NotifyStartup {
+		return
+	}
+	b.dmSuperAdmin(text, parseMode)
+}
+
+// dmSuperAdmin sends a best-effort DM to the configured super-admin without any
+// feature gate of its own; the caller decides whether the notice is enabled.
+// Send failures are logged, never fatal.
+func (b *Bot) dmSuperAdmin(text string, parseMode telegram.ParseMode) {
+	if b.config.Admin.SuperAdminUserID == 0 {
 		return
 	}
 	if _, err := b.tg.SendMessage(telegram.SendMessageParams{
@@ -202,6 +212,15 @@ func (b *Bot) maybeForceGC() {
 
 // processUpdate handles a single incoming update regardless of how it was received.
 func (b *Bot) processUpdate(update telegram.Update) {
+	// Webhook requests are handled concurrently and may be retried while the
+	// first delivery is still doing slow AI work. Claim the stable Telegram
+	// update ID before any side effect. Callback queries keep their dedicated
+	// callback-ID guard, which also answers duplicate callbacks to clear the UI.
+	if update.UpdateID != 0 && update.CallbackQuery == nil && b.markUpdateHandled(update.UpdateID) {
+		log.Printf("Ignoring duplicate Telegram update %d (%s)", update.UpdateID, describeUpdateType(update))
+		return
+	}
+
 	start := b.metrics.begin()
 	defer b.metrics.end(start)
 
@@ -250,6 +269,34 @@ func (b *Bot) processUpdate(update telegram.Update) {
 	} else if update.MessageReaction != nil {
 		b.handleMessageReaction(update.MessageReaction)
 	}
+}
+
+// updateDedupTTL bounds memory use while comfortably covering Telegram's
+// webhook retry window.
+const updateDedupTTL = 10 * time.Minute
+
+// markUpdateHandled atomically claims an update ID and reports whether another
+// delivery already claimed it recently.
+func (b *Bot) markUpdateHandled(id int64) (duplicate bool) {
+	now := time.Now()
+
+	b.updateDedupMu.Lock()
+	defer b.updateDedupMu.Unlock()
+
+	if b.updateDedup == nil {
+		b.updateDedup = make(map[int64]time.Time)
+	}
+	if seen, ok := b.updateDedup[id]; ok && now.Sub(seen) < updateDedupTTL {
+		return true
+	}
+
+	b.updateDedup[id] = now
+	for updateID, seen := range b.updateDedup {
+		if now.Sub(seen) >= updateDedupTTL {
+			delete(b.updateDedup, updateID)
+		}
+	}
+	return false
 }
 
 // startPollingMode starts the bot in long polling mode.

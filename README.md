@@ -151,6 +151,8 @@ SSH:
 - **Config without files.** Boot a minimal cloud instance (e.g. on Bunny.net) with no mounted
   config, then configure everything through the web UI; the bot can seed and persist its config
   in the database.
+- **Scheduled backups.** Copy the whole database on a timer to a local folder, a WebDAV server
+  or a bunny.net Edge Storage zone, with a per-instance file prefix.
 - **Localized** interface and config docs in English and Russian.
 - **Multi-instance safe.** Database-level locking prevents duplicate scheduled runs when more
   than one instance is live in the cloud - for example during a redeployment when the old and

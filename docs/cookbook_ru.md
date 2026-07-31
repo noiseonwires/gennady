@@ -86,13 +86,14 @@ flowchart LR
 | --- | --- |
 | `content_moderation.prompt` | `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reply_to}}`, `{{new_user_rules}}` |
 | `content_moderation.warning_prompt` | `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{reputation}}` |
-| `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}` |
+| `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}` |
 | `morning_greeting.prompt` | `{{weekday}}`, `{{date}}`, `{{weather}}`, `{{weather_ru}}`, `{{holidays}}`, `{{events}}` |
 | `daily_summary.prompt` | `{{messages}}` |
 | `message_summaries.prompt` | `{{message}}` |
 | `link_summaries.prompt` | `{{title}}`, `{{url}}`, `{{content}}`, `{{truncated_suffix}}` |
 | `user_profiles.prompt` | `{{username}}`, `{{messages}}` |
 | `user_profiles.update_prompt` | `{{username}}`, `{{messages}}`, `{{existing_profile}}` |
+| `website_watch.prompt` | `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}` |
 | `translation_prompt` / `rss.*` | `{{text}}` |
 
 **`{{user_profile}}` против `{{user_reputation}}`:**
@@ -106,6 +107,9 @@ flowchart LR
 
 Оба пусты, если не включено `ai.user_profiles.enabled: true` (или
 `content_moderation.new_user_profile_check_enabled: true`).
+
+Оба работают и в `creative_replies.prompt` - бот может подстраивать шутки под собеседника
+(например, мягче с новичками и язвительнее с завсегдатаями).
 
 **`{{new_user_rules}}`:** разворачивается в текст `ai.content_moderation.new_user_rules`
 **только** пока пользователь «новый» - в течение `ai.content_moderation.new_user_window_hours`

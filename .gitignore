@@ -46,6 +46,9 @@ moderation.db
 db/
 logs/
 
+# Database backups (default backup.local_path)
+backups/
+
 # Log files
 *.log
 logs/

@@ -603,6 +603,18 @@
                     </div>
                 </template>
 
+                <!-- Server Time -->
+                <template x-if="serverTime">
+                    <div class="card" style="border-left:4px solid var(--green)">
+                        <h3>🕐 <span x-text="$store.i18n.t('diag_server_time')"></span></h3>
+                        <div class="diag-detail" style="font-size:1.1rem">
+                            <span x-text="serverTime"></span>
+                            <small x-show="serverTimezone" style="opacity:.6" x-text="' (' + serverTimezone + ')'"></small>
+                        </div>
+                        <div class="notice notice-tip" style="margin-top:.5rem" x-text="$store.i18n.t('diag_server_time_tip')"></div>
+                    </div>
+                </template>
+
                 <!-- Telegram Connection Status -->
                 <div class="card" :style="'border-left:4px solid var(' + (telegram.connected ? '--green' : '--red') + ')'">
                     <h3>🤖 <span x-text="$store.i18n.t('diag_telegram')"></span></h3>
@@ -1140,6 +1152,64 @@
                                 </div>
                             </template>
 
+                            <!-- Watched Websites Section -->
+                            <template x-if="sec.id === 'ai_website_watch'">
+                                <div x-data="watchedSitesEditor()" x-init="load()">
+                                    <h4 x-text="$store.i18n.t('watch_title')"></h4>
+                                    <p class="desc" x-text="$store.i18n.t('watch_desc')"></p>
+                                    <template x-if="loading">
+                                        <div class="upload-status"><span class="upload-spinner"></span><span x-text="$store.i18n.t('loading')"></span></div>
+                                    </template>
+                                    <template x-for="(site, si) in sites" :key="si">
+                                        <div class="rss-item">
+                                            <div class="rss-row">
+                                                <input :placeholder="$store.i18n.t('rss_name')" x-model="site.name">
+                                                <input :placeholder="$store.i18n.t('rss_url')" x-model="site.url">
+                                            </div>
+                                            <div class="rss-row">
+                                                <label><input type="checkbox" x-model="site.enabled"> <span x-text="$store.i18n.t('rss_enabled')"></span></label>
+                                                <label class="rss-label"><span x-text="$store.i18n.t('rss_time')"></span>
+                                                    <input x-model="site.time" style="max-width:80px"></label>
+                                                <label class="rss-label" :title="$store.i18n.t('watch_interval_hint')"><span x-text="$store.i18n.t('watch_interval')"></span>
+                                                    <input type="number" min="0" x-model.number="site.interval_hours" style="max-width:90px"></label>
+                                                <label class="rss-label"><span x-text="$store.i18n.t('rss_max_len')"></span>
+                                                    <input type="number" x-model.number="site.max_message_length" style="max-width:120px"></label>
+                                                <button class="remove-btn" @click="sites.splice(si, 1)" x-text="$store.i18n.t('rss_remove')"></button>
+                                            </div>
+                                            <div class="rss-row" style="flex-direction:column;align-items:stretch;gap:.4rem">
+                                                <div class="desc" x-text="$store.i18n.t('rss_post_to_desc')"></div>
+                                                <template x-for="(t, ti) in (site.post_to || [])" :key="ti">
+                                                    <div class="chat-topic-row">
+                                                        <select x-model.number="t.chat">
+                                                            <template x-if="!t.chat">
+                                                                <option :value="0" x-text="$store.i18n.t('chat_topic_pick_chat')"></option>
+                                                            </template>
+                                                            <template x-for="c in chats" :key="c.id">
+                                                                <option :value="Number(c.id)" x-text="(c.title || ('Chat ' + c.id)) + ' (' + c.id + ')'"></option>
+                                                            </template>
+                                                        </select>
+                                                        <select :value="topicMode(t)" @change="setTopicMode(t, $event.target.value)">
+                                                            <option value="main" x-text="$store.i18n.t('topic_mode_main')"></option>
+                                                            <option value="specific" x-text="$store.i18n.t('topic_mode_specific')"></option>
+                                                        </select>
+                                                        <label class="rss-label" x-show="topicMode(t) === 'specific'"><span x-text="$store.i18n.t('chat_topic_topic')"></span>
+                                                            <input type="number" min="1" x-model.number="t.topic" style="max-width:120px"></label>
+                                                        <button class="remove-btn" @click="removePostTo(site, ti)" x-text="$store.i18n.t('rss_remove')"></button>
+                                                    </div>
+                                                </template>
+                                                <div>
+                                                    <button class="add-btn" @click="addPostTo(site)" x-text="'+ ' + $store.i18n.t('rss_post_to_add')"></button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <button class="add-btn" @click="add()" x-text="'+ ' + $store.i18n.t('watch_add')"></button>
+                                    <button class="save-btn" :disabled="saving" @click="save()" x-text="saving ? $store.i18n.t('cfg_saving') : $store.i18n.t('cfg_save')"></button>
+                                    <span class="upload-spinner" x-show="saving" x-cloak style="margin-left:.4rem;vertical-align:middle"></span>
+                                    <span class="save-msg" :class="msgClass" x-text="msg"></span>
+                                </div>
+                            </template>
+
                             <!-- Topic Names Section (general): static forum-topic id → name registry. -->
                             <template x-if="sec.id === 'general'">
                                 <div x-data="topicsEditor()" x-init="load()" class="moderation-rules-editor">
@@ -1284,6 +1354,9 @@
                                                 </div>
                                             </div>
                                             <div class="field">
+                                                <label><input type="checkbox" x-model="m.enabled"> <span x-text="$store.i18n.t('mdl_enabled')"></span></label>
+                                            </div>
+                                            <div class="field">
                                                 <label x-text="$store.i18n.t('mdl_provider')"></label>
                                                 <select x-model="m.provider">
                                                     <option value="" x-text="$store.i18n.t('mdl_provider_auto')"></option>
@@ -1308,6 +1381,7 @@
                                             </div>
                                             <div class="field">
                                                 <label x-text="$store.i18n.t('mdl_temperature')"></label>
+                                                <div class="desc" x-text="$store.i18n.t('mdl_temperature_hint')"></div>
                                                 <input type="number" step="0.1" min="0" max="2" x-model.number="m.temperature">
                                             </div>
                                             <div class="field">
@@ -1315,7 +1389,7 @@
                                             </div>
                                         </div>
                                     </template>
-                                    <button class="add-btn" @click="models.push({ provider:'', endpoint:'', api_key:'', deployment_name:'', temperature:null, omit_max_tokens:false, _show:false })"
+                                    <button class="add-btn" @click="models.push({ provider:'', enabled:true, endpoint:'', api_key:'', deployment_name:'', temperature:null, omit_max_tokens:false, _show:false })"
                                             x-text="'+ ' + $store.i18n.t('mdl_add')"></button>
                                     <button class="save-btn" :disabled="saving" @click="save()" x-text="saving ? $store.i18n.t('cfg_saving') : $store.i18n.t('cfg_save')"></button>
                                     <span class="upload-spinner" x-show="saving" x-cloak style="margin-left:.4rem;vertical-align:middle"></span>
@@ -1562,6 +1636,7 @@
                             <p>SQLite database backup</p>
                             <button @click="downloadFile('/api/files/db','moderation.db')" x-text="$store.i18n.t('sys_dl_db')"></button>
                             <button :disabled="uploading" @click="uploadFile('/api/files/db')" x-text="$store.i18n.t('sys_ul_db')"></button>
+                            <button :disabled="backingUp" @click="runBackup()" x-text="backingUp ? $store.i18n.t('sys_backup_running') : $store.i18n.t('sys_backup_now')"></button>
                         </div>
                     </div>
                 </div>

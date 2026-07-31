@@ -169,6 +169,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.Mux.HandleFunc(p+"/api/config", ws.requireAuth(ws.handleConfigRoute))
 	ws.Mux.HandleFunc(p+"/api/config/meta", ws.requireAuth(ws.handler.handleGetConfigMeta))
 	ws.Mux.HandleFunc(p+"/api/config/rss", ws.requireAuth(ws.handleRssRoute))
+	ws.Mux.HandleFunc(p+"/api/config/website-watch", ws.requireAuth(ws.handleWebsiteWatchRoute))
 	ws.Mux.HandleFunc(p+"/api/config/topics", ws.requireAuth(ws.handleTopicsRoute))
 	ws.Mux.HandleFunc(p+"/api/config/models", ws.requireAuth(ws.handleModelsRoute))
 	ws.Mux.HandleFunc(p+"/api/config/moderation-rules", ws.requireAuth(ws.handleModerationRulesRoute))
@@ -208,6 +209,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.Mux.HandleFunc(p+"/api/files/db", ws.requireAuth(ws.handleFileDBRoute))
 	ws.Mux.HandleFunc(p+"/api/files/db/clone-to-local", ws.requireAuth(ws.handler.handleCloneRemoteToLocal))
 	ws.Mux.HandleFunc(p+"/api/files/db/clone-to-remote", ws.requireAuth(ws.handler.handleCloneLocalToRemote))
+	ws.Mux.HandleFunc(p+"/api/files/db/backup-now", ws.requireAuth(ws.handler.handleRunBackup))
 
 	// Static files (SPA)
 	ws.Mux.HandleFunc(p+"/", ws.staticHandler(p))
@@ -403,6 +405,17 @@ func (ws *WebServer) handleRssRoute(w http.ResponseWriter, r *http.Request) {
 		ws.handler.handleGetRssFeeds(w, r)
 	case http.MethodPut, http.MethodPost:
 		ws.handler.handleSaveRssFeeds(w, r)
+	default:
+		writeWebErr(w, errMethodNotAllowed)
+	}
+}
+
+func (ws *WebServer) handleWebsiteWatchRoute(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		ws.handler.handleGetWatchedSites(w, r)
+	case http.MethodPut, http.MethodPost:
+		ws.handler.handleSaveWatchedSites(w, r)
 	default:
 		writeWebErr(w, errMethodNotAllowed)
 	}

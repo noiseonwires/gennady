@@ -5,6 +5,7 @@ package config
 import (
 	"net"
 	"strings"
+	"time"
 )
 
 // Cross-cutting Config query helpers used throughout the bot. None of these
@@ -118,6 +119,113 @@ func (c *Config) IsMessageSummaryActive(chatID int64, topicID int) bool {
 // IsLinkSummaryActive reports whether link summarization applies to (chatID, topicID).
 func (c *Config) IsLinkSummaryActive(chatID int64, topicID int) bool {
 	return c.InScope(c.AI.LinkSummaries.IncludedTopics, c.AI.LinkSummaries.ExcludedTopics, chatID, topicID)
+}
+
+// nightModeWeekdays maps the day tokens accepted in night_mode.days to a
+// time.Weekday. Both the full name and the common abbreviation are accepted;
+// lookups lower-case and trim the token first.
+var nightModeWeekdays = map[string]time.Weekday{
+	"sunday": time.Sunday, "sun": time.Sunday,
+	"monday": time.Monday, "mon": time.Monday,
+	"tuesday": time.Tuesday, "tue": time.Tuesday, "tues": time.Tuesday,
+	"wednesday": time.Wednesday, "wed": time.Wednesday,
+	"thursday": time.Thursday, "thu": time.Thursday, "thur": time.Thursday, "thurs": time.Thursday,
+	"friday": time.Friday, "fri": time.Friday,
+	"saturday": time.Saturday, "sat": time.Saturday,
+}
+
+// clockMinutes parses an "HH:MM" 24-hour string into minutes-since-midnight.
+func clockMinutes(s string) (int, bool) {
+	t, err := time.Parse("15:04", strings.TrimSpace(s))
+	if err != nil {
+		return 0, false
+	}
+	return t.Hour()*60 + t.Minute(), true
+}
+
+// IsNightModeActive reports whether the night-mode quiet window covers a message
+// in (chatID, topicID) at the given time. The feature must be enabled, the
+// (chat, topic) must be in scope (included_topics minus excluded_topics), and
+// now must fall inside the configured time-of-day window on an enabled day.
+func (c *Config) IsNightModeActive(chatID int64, topicID int, now time.Time) bool {
+	if !c.NightMode.Enabled {
+		return false
+	}
+	if !c.InScope(c.NightMode.IncludedTopics, c.NightMode.ExcludedTopics, chatID, topicID) {
+		return false
+	}
+	return c.NightMode.inWindow(now)
+}
+
+// inWindow reports whether now falls inside the configured night-mode window,
+// honoring the day filter. Windows may wrap midnight (EndTime < StartTime); a
+// wrapping window is attributed to the weekday it STARTS on, so its morning
+// portion (before EndTime) is gated on the previous day's membership. A window
+// with equal start/end, or an unparseable time, is treated as inactive.
+func (n *NightModeConfig) inWindow(now time.Time) bool {
+	start, ok1 := clockMinutes(n.StartTime)
+	end, ok2 := clockMinutes(n.EndTime)
+	if !ok1 || !ok2 || start == end {
+		return false
+	}
+	cur := now.Hour()*60 + now.Minute()
+	if start < end {
+		// Same-day window (e.g. 08:00-23:00).
+		if cur < start || cur >= end {
+			return false
+		}
+		return n.dayEnabled(now.Weekday())
+	}
+	// Overnight window (wraps midnight).
+	if cur >= start {
+		return n.dayEnabled(now.Weekday())
+	}
+	if cur < end {
+		return n.dayEnabled(now.AddDate(0, 0, -1).Weekday())
+	}
+	return false
+}
+
+// dayEnabled reports whether weekday wd is covered by the Days filter. An empty
+// list means every day.
+func (n *NightModeConfig) dayEnabled(wd time.Weekday) bool {
+	if len(n.Days) == 0 {
+		return true
+	}
+	for _, d := range n.Days {
+		if w, ok := nightModeWeekdays[strings.ToLower(strings.TrimSpace(d))]; ok && w == wd {
+			return true
+		}
+	}
+	return false
+}
+
+// NightModeWindowEnd returns the wall-clock time at which the night-mode window
+// containing now ends (the next occurrence of EndTime at or after now). Callers
+// should confirm the window is active first (IsNightModeActive). Returns the
+// zero time when the window bounds are unparseable or equal.
+func (c *Config) NightModeWindowEnd(now time.Time) time.Time {
+	return c.NightMode.windowEnd(now)
+}
+
+func (n *NightModeConfig) windowEnd(now time.Time) time.Time {
+	start, ok1 := clockMinutes(n.StartTime)
+	end, ok2 := clockMinutes(n.EndTime)
+	if !ok1 || !ok2 || start == end {
+		return time.Time{}
+	}
+	endToday := time.Date(now.Year(), now.Month(), now.Day(), end/60, end%60, 0, 0, now.Location())
+	// Same-day window, or the morning portion of an overnight window: EndTime is
+	// later today. For the evening portion (now at/after StartTime) of an
+	// overnight window, EndTime falls on the next day.
+	if start < end {
+		return endToday
+	}
+	cur := now.Hour()*60 + now.Minute()
+	if cur >= start {
+		return endToday.AddDate(0, 0, 1)
+	}
+	return endToday
 }
 
 // ChatRulesFor returns the rules text that should be substituted into

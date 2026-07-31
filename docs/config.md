@@ -27,6 +27,7 @@ auto-generated [CONFIG_REFERENCE_en.md](CONFIG_REFERENCE_en.md) (or
 - [Daily summary](#daily-summary)
 - [Message & link summaries](#message--link-summaries)
 - [RSS feeds](#rss-feeds)
+- [Website watch](#website-watch)
 - [User profiles](#user-profiles)
 - [Reactions & debug](#reactions--debug)
 - [Prompt placeholders](#prompt-placeholders)
@@ -295,6 +296,101 @@ database_cleanup:
 
 ---
 
+## Database backup
+
+Periodically copies the whole database off the machine. For a **local** database the
+live SQLite file is copied after a WAL checkpoint; for a **remote** database the data
+is first exported into a fresh SQLite file (the same thing the web UI "Download DB"
+button does).
+```yaml
+backup:
+  enabled: false
+  interval_hours: 48          # run every N hours
+  file_prefix: ""             # prepended to "moderation.db" → e.g. chat1_moderation.db
+  include_config: true        # include the config_values table
+  notify_super_admin_on_failure: false   # DM the super-admin if a scheduled run fails
+  target: "local"             # "local", "webdav" or "bunny"
+  local_path: "./backups"
+```
+
+Each run replaces the previous backup with the same name; there is no version
+history. If you want one, point the destination at storage that versions files
+itself, or keep snapshots with an external tool.
+
+A failed backup is always logged and reported to the admin chat. Enable
+`notify_super_admin_on_failure` to also get a direct message with the error
+details - useful because a silently broken backup is only discovered when you
+need it. It requires `admin.super_admin_user_id` and is independent of
+`admin.notify_startup`. The "Back up now" button does not trigger it, since it
+already shows errors in the browser.
+
+**Prefix** lets several bot instances back up into the same folder/zone without
+overwriting each other. Only `A-Z a-z 0-9 . _ -` are kept; anything else becomes `_`.
+
+**WebDAV** (Nextcloud, ownCloud, Synology, Apache mod_dav, …):
+
+```yaml
+backup:
+  target: "webdav"
+  webdav:
+    url: "https://cloud.example.com/remote.php/dav/files/user/backups"
+    username: "user"
+    password: "app-token"
+```
+
+**bunny.net Edge Storage:**
+
+```yaml
+backup:
+  target: "bunny"
+  bunny:
+    endpoint: "storage.bunnycdn.com"   # region host of your storage zone
+    storage_zone: "my-zone"
+    access_key: ""                     # storage zone password
+    path: "gennady/backups"            # optional folder inside the zone
+```
+
+Use the **storage zone password** from the zone's *FTP & API Access* page as
+`access_key` — not your account-level bunny.net API key. `endpoint` must match the
+zone's primary region:
+
+| Region | Endpoint |
+|---|---|
+| Frankfurt, DE (default) | `storage.bunnycdn.com` |
+| London, UK | `uk.storage.bunnycdn.com` |
+| New York, US | `ny.storage.bunnycdn.com` |
+| Los Angeles, US | `la.storage.bunnycdn.com` |
+| Singapore, SG | `sg.storage.bunnycdn.com` |
+| Stockholm, SE | `se.storage.bunnycdn.com` |
+| São Paulo, BR | `br.storage.bunnycdn.com` |
+| Johannesburg, SA | `jh.storage.bunnycdn.com` |
+| Sydney, AU | `syd.storage.bunnycdn.com` |
+
+> Uploads send bunny.net a SHA-256 `Checksum` header, so a corrupted transfer is
+> rejected by the server instead of silently replacing a good backup.
+
+### Temporary files
+
+Every backup first writes one intermediate snapshot to a scratch folder, uploads
+it, and then **always deletes it** - including when the upload fails. A WebDAV or
+Bunny backup therefore leaves nothing behind on the bot's own disk.
+
+The scratch folder is `backup.temp_dir`. When it is empty the bot uses the folder
+of `database.path`, and if that folder cannot be written it falls back to the
+system temp dir with a warning in the log.
+
+> **Containers:** set `temp_dir` explicitly. With a remote database, `database.path`
+> often still holds a default such as `/db/moderation.db` that is never actually
+> used - and an unprivileged container process cannot create `/db`, which used to
+> fail the backup with `mkdir /db: permission denied`. A relative `"./"` or
+> `"/tmp"` works. Make sure the chosen folder has room for a full copy of the
+> database.
+
+> The System tab of the web UI has a **Back up now** button that runs the same job
+> immediately, which is the quickest way to verify credentials and paths.
+
+---
+
 ## Server, webhook & web UI
 
 Shared HTTP server settings used by both the webhook and the web UI:
@@ -401,6 +497,7 @@ ai:
 
   light_model:
     - provider: "azure"          # "azure" or "openai" (auto-detected if omitted)
+      enabled: true              # default true; false excludes this entry from every AI call
       endpoint: "https://YOUR.openai.azure.com/"
       api_key: "KEY"
       deployment_name: "gpt-4o-mini"
@@ -420,11 +517,15 @@ ai:
       temperature: 0.7
 ```
 
+Set `enabled: false` on an entry to park a model without deleting its settings: it is skipped
+by every AI call and by the failover rotation. Omitting the field means enabled.
+
 - **`provider: azure`** - `endpoint` is the resource base URL, `deployment_name` is the Azure
   deployment, auth via `api-key` header.
 - **`provider: openai`** - works with OpenAI and any OpenAI-compatible gateway (OpenRouter,
   Groq, LiteLLM, local Ollama, …). `endpoint` is the API base, `deployment_name` is the model
   id, auth via Bearer token.
+- **`enabled: false`** - the entry stays in the config (and in the Web UI) but is never used.
 
 Most AI features have a `use_full_model` toggle to pick which model they use.
 
@@ -613,6 +714,10 @@ ai:
 Both lists use the `(chat, topic)` shape from [Chats & topics](#chats--topics). To enable
 replies only in one topic, set `included_topics: [{chat: -100111, topic: 42}]`.
 
+The prompt also accepts `{{quote}}` (the fragment the user quoted, if any) and the
+`{{user_profile}}` / `{{user_reputation}}` blocks - see the
+[placeholder reference](cookbook.md#prompt-placeholders-reference).
+
 ---
 
 ## Morning greeting
@@ -760,6 +865,54 @@ ai:
       Translate to the chat language. Keep the headline on the first line.
       {{text}}
 ```
+
+---
+
+## Website watch
+
+RSS for pages that publish no feed. Every entry in `ai.website_watch.sites` is fetched on its own
+schedule through the same extraction pipeline as chat link summaries, converted to plain text and
+compared with the last **reported** snapshot using a word-level diff. The diff goes to the AI, which
+either describes the change or replies with `no_changes_marker` - in that case nothing is posted.
+
+```yaml
+ai:
+  website_watch:
+    use_full_model: true
+    light_model_threshold: 8192   # force the light model when the diff is longer than this
+    max_content_length: 8192      # how much page text is stored and compared
+    max_diff_length: 4096         # how much of the diff is sent to the AI
+    no_changes_marker: "NO_CHANGES"
+    sites:
+      - name: "Example Rules Page"
+        url: "https://example.com/rules"
+        enabled: true
+        interval_hours: 12       # check every N hours; 0 = use the daily time below
+        time: "09:00"            # daily check time (HH:MM), used when interval_hours is 0
+        post_to: []              # where to publish (empty = every moderation chat, main area)
+        max_message_length: 0    # truncate threshold in chars (0 = Telegram limit, 4096)
+
+    prompt:
+      system: |
+        You track changes on web pages. Report only meaningful changes to the page's substance and
+        ignore ads, view counters, "last updated" stamps and cosmetic rewording.
+        If nothing meaningful changed, answer with exactly {{marker}} and nothing else.
+      user: |
+        Page: {{name}}
+        URL: {{url}}
+
+        Diff ("-" = removed, "+" = added):
+        {{diff}}
+```
+
+Notes:
+
+- The **first check only records a baseline** - reports start from the second check.
+- The stored snapshot advances **only when a change was reported**, so a series of small edits that
+  are individually insignificant still adds up to a report instead of becoming the new baseline.
+- False positives are a prompt problem: describe the noise your page produces (rotating banners,
+  timestamps, counters) and tell the model to answer with the marker for it.
+- Sites are also editable in the Web UI, under the "Website Watch" config section.
 
 ---
 

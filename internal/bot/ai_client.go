@@ -197,6 +197,12 @@ func (b *Bot) callAzureOpenAIWithRetriesAndBackoff(service string, prompt string
 	// fall back to the regular exponential schedule.
 	const maxRetryAfter = 60 * time.Second
 
+	// Disabled endpoints are filtered out by Count()/Get(), so an empty set
+	// means every configured model for this slot is turned off.
+	if modelConfigs.Count() == 0 {
+		return "", fmt.Errorf("no enabled AI model endpoint configured")
+	}
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		modelConfig := modelConfigs.Get(attempt)
 
@@ -319,6 +325,12 @@ func (b *Bot) callAzureOpenAINoFallback(service string, prompt string, systemPro
 
 // callAzureOpenAIWithConfig makes a request to Azure OpenAI API with specific model config.
 func (b *Bot) callAzureOpenAIWithConfig(service string, prompt string, systemPrompt string, modelConfig config.AIModelConfig, maxTokens int, isFallback bool) (string, error) {
+	// Last line of defense: a model marked disabled is never contacted, no
+	// matter which code path selected it.
+	if !modelConfig.IsEnabled() {
+		return "", fmt.Errorf("AI model %q is disabled", modelConfig.DeploymentName)
+	}
+
 	provider := modelConfig.ResolveProvider()
 
 	var url string

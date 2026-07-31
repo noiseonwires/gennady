@@ -203,11 +203,13 @@ func TestConfigValues(t *testing.T) {
 func TestWebSessions(t *testing.T) {
 	db := newTestDB(t)
 	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
-	require.NoError(t, db.SaveWebSession("hash1", exp))
+	require.NoError(t, db.SaveWebSessionActor("hash1", exp, 42, "@admin (Admin Name)"))
 
-	got, err := db.GetWebSessionExpiry("hash1")
+	got, actorID, actorName, err := db.GetWebSession("hash1")
 	require.NoError(t, err)
 	assert.WithinDuration(t, exp, got, 2*time.Second)
+	assert.Equal(t, int64(42), actorID)
+	assert.Equal(t, "@admin (Admin Name)", actorName)
 
 	// Unknown token -> zero time, no error.
 	got, err = db.GetWebSessionExpiry("nope")

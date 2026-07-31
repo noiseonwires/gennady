@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,38 +27,51 @@ type mockModerator struct {
 	delMessagesCount int
 	delMessageCalls  int
 	remoderateCalls  int
+	lastActorID      int64
+	lastActorName    string
 
 	err error
 }
 
-func (m *mockModerator) WebMuteUser(userID, chatID int64, messageID, durationMinutes int) error {
+func (m *mockModerator) actor(actorID int64, actorName string) {
+	m.lastActorID = actorID
+	m.lastActorName = actorName
+}
+func (m *mockModerator) WebMuteUser(userID, chatID int64, messageID, durationMinutes int, actorID int64, actorName string) error {
 	m.muteCalls++
+	m.actor(actorID, actorName)
 	return m.err
 }
-func (m *mockModerator) WebCruelMuteUser(userID, chatID int64, messageID, durationMinutes int) error {
+func (m *mockModerator) WebCruelMuteUser(userID, chatID int64, messageID, durationMinutes int, actorID int64, actorName string) error {
 	m.cruelMuteCalls++
+	m.actor(actorID, actorName)
 	return m.err
 }
-func (m *mockModerator) WebUnmuteUser(userID, chatID int64) error {
+func (m *mockModerator) WebUnmuteUser(userID, chatID, actorID int64, actorName string) error {
 	m.unmuteCalls++
+	m.actor(actorID, actorName)
 	return m.err
 }
-func (m *mockModerator) WebWarnUser(userID, chatID int64, messageID int) error {
+func (m *mockModerator) WebWarnUser(userID, chatID int64, messageID int, actorID int64, actorName string) error {
 	m.warnCalls++
+	m.actor(actorID, actorName)
 	return m.err
 }
-func (m *mockModerator) WebDeleteUserMessages(userID, chatID int64, period string) (int, error) {
+func (m *mockModerator) WebDeleteUserMessages(userID, chatID int64, period string, actorID int64, actorName string) (int, error) {
 	m.delMessagesArgs.userID = userID
 	m.delMessagesArgs.chatID = chatID
 	m.delMessagesArgs.period = period
+	m.actor(actorID, actorName)
 	return m.delMessagesCount, m.err
 }
-func (m *mockModerator) WebDeleteMessage(userID, chatID int64, messageID int) error {
+func (m *mockModerator) WebDeleteMessage(userID, chatID int64, messageID int, actorID int64, actorName string) error {
 	m.delMessageCalls++
+	m.actor(actorID, actorName)
 	return m.err
 }
-func (m *mockModerator) WebRemoderateMessage(userID, chatID int64, messageID int) error {
+func (m *mockModerator) WebRemoderateMessage(userID, chatID int64, messageID int, actorID int64, actorName string) error {
 	m.remoderateCalls++
+	m.actor(actorID, actorName)
 	return m.err
 }
 
@@ -175,6 +189,37 @@ func TestHandleModerationDeleteMessages(t *testing.T) {
 	body := decodeJSONBody(t, rr)
 	assert.Equal(t, float64(7), body["deleted"])
 	assert.Equal(t, "1d", m.delMessagesArgs.period)
+}
+
+func TestHandleModerationDeleteMessages_UsesAuthenticatedModerator(t *testing.T) {
+	h := newTestHandler(t, newTestConfig())
+	m := &mockModerator{}
+	h.moderator = m
+	token, otp := h.auth.CreateModeratorLogin(42, "@admin (Admin Name)")
+	sessionToken, err := h.auth.ValidateModeratorLogin(token, otp, "ip")
+	require.NoError(t, err)
+	r := modRequest(`{"user_id":1,"chat_id":2,"period":"all"}`)
+	r.AddCookie(&http.Cookie{Name: webSessionCookieName, Value: sessionToken})
+	rr := httptest.NewRecorder()
+	h.handleModerationDeleteMessages(rr, r)
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, int64(42), m.lastActorID)
+	assert.Equal(t, "@admin (Admin Name)", m.lastActorName)
+}
+
+func TestHandleModerationDeleteMessages_LegacySessionUsesReservedActor(t *testing.T) {
+	h := newTestHandler(t, newTestConfig())
+	m := &mockModerator{}
+	h.moderator = m
+	legacyToken := moderatorTokenPrefix + "legacy"
+	h.auth.sessions[legacyToken] = &session{token: legacyToken, expiresAt: time.Now().Add(time.Hour)}
+	r := modRequest(`{"user_id":1,"chat_id":2,"period":"all"}`)
+	r.AddCookie(&http.Cookie{Name: webSessionCookieName, Value: legacyToken})
+	rr := httptest.NewRecorder()
+	h.handleModerationDeleteMessages(rr, r)
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, ReservedWebModeratorID, m.lastActorID)
+	assert.Equal(t, ReservedWebModeratorName, m.lastActorName)
 }
 
 func TestHandleModerationDeleteMessages_Error(t *testing.T) {

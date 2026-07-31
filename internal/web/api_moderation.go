@@ -23,6 +23,19 @@ type modActionRequest struct {
 	Period string `json:"period,omitempty"`
 }
 
+func (h *apiHandler) moderationActor(r *http.Request) (int64, string) {
+	token := extractSessionToken(r)
+	if sessionRole(token) != RoleModerator {
+		return h.config.Admin.SuperAdminUserID, ""
+	}
+	if h.auth != nil {
+		if actorID, actorName, ok := h.auth.SessionActor(token); ok {
+			return actorID, actorName
+		}
+	}
+	return ReservedWebModeratorID, ReservedWebModeratorName
+}
+
 func (h *apiHandler) decodeModRequest(w http.ResponseWriter, r *http.Request) (*modActionRequest, bool) {
 	if r.Method != http.MethodPost {
 		writeWebErr(w, errMethodNotAllowed)
@@ -49,11 +62,12 @@ func (h *apiHandler) handleModerationMute(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	actorID, actorName := h.moderationActor(r)
 	var err error
 	if req.Cruel {
-		err = h.moderator.WebCruelMuteUser(req.UserID, req.ChatID, req.MessageID, req.Duration)
+		err = h.moderator.WebCruelMuteUser(req.UserID, req.ChatID, req.MessageID, req.Duration, actorID, actorName)
 	} else {
-		err = h.moderator.WebMuteUser(req.UserID, req.ChatID, req.MessageID, req.Duration)
+		err = h.moderator.WebMuteUser(req.UserID, req.ChatID, req.MessageID, req.Duration, actorID, actorName)
 	}
 	if err != nil {
 		writeWebErrf(w, errModerationActionFailed, "%v", err)
@@ -67,7 +81,8 @@ func (h *apiHandler) handleModerationUnmute(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	if err := h.moderator.WebUnmuteUser(req.UserID, req.ChatID); err != nil {
+	actorID, actorName := h.moderationActor(r)
+	if err := h.moderator.WebUnmuteUser(req.UserID, req.ChatID, actorID, actorName); err != nil {
 		writeWebErrf(w, errModerationActionFailed, "%v", err)
 		return
 	}
@@ -83,7 +98,8 @@ func (h *apiHandler) handleModerationWarn(w http.ResponseWriter, r *http.Request
 		writeWebErr(w, errMessageIDRequired)
 		return
 	}
-	if err := h.moderator.WebWarnUser(req.UserID, req.ChatID, req.MessageID); err != nil {
+	actorID, actorName := h.moderationActor(r)
+	if err := h.moderator.WebWarnUser(req.UserID, req.ChatID, req.MessageID, actorID, actorName); err != nil {
 		writeWebErrf(w, errModerationActionFailed, "%v", err)
 		return
 	}
@@ -95,7 +111,8 @@ func (h *apiHandler) handleModerationDeleteMessages(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
-	deleted, err := h.moderator.WebDeleteUserMessages(req.UserID, req.ChatID, req.Period)
+	actorID, actorName := h.moderationActor(r)
+	deleted, err := h.moderator.WebDeleteUserMessages(req.UserID, req.ChatID, req.Period, actorID, actorName)
 	if err != nil {
 		writeWebErrf(w, errModerationActionFailed, "%v", err)
 		return
@@ -112,7 +129,8 @@ func (h *apiHandler) handleModerationDeleteMessage(w http.ResponseWriter, r *htt
 		writeWebErr(w, errMessageIDRequired)
 		return
 	}
-	if err := h.moderator.WebDeleteMessage(req.UserID, req.ChatID, req.MessageID); err != nil {
+	actorID, actorName := h.moderationActor(r)
+	if err := h.moderator.WebDeleteMessage(req.UserID, req.ChatID, req.MessageID, actorID, actorName); err != nil {
 		writeWebErrf(w, errModerationActionFailed, "%v", err)
 		return
 	}
@@ -131,7 +149,8 @@ func (h *apiHandler) handleModerationRemoderate(w http.ResponseWriter, r *http.R
 		writeWebErr(w, errMessageIDRequired)
 		return
 	}
-	if err := h.moderator.WebRemoderateMessage(req.UserID, req.ChatID, req.MessageID); err != nil {
+	actorID, actorName := h.moderationActor(r)
+	if err := h.moderator.WebRemoderateMessage(req.UserID, req.ChatID, req.MessageID, actorID, actorName); err != nil {
 		writeWebErrf(w, errModerationActionFailed, "%v", err)
 		return
 	}

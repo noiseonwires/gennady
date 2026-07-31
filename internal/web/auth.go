@@ -37,6 +37,11 @@ const (
 const (
 	RoleSuper     = "super"
 	RoleModerator = "moderator"
+	// ReservedWebModeratorID identifies moderator Web UI actions from legacy
+	// sessions that predate per-moderator attribution. Telegram user IDs are
+	// positive, so this value cannot collide with a real moderator account.
+	ReservedWebModeratorID   int64 = -1
+	ReservedWebModeratorName       = "Web UI moderator"
 
 	// moderatorTokenPrefix marks a session token as belonging to a moderator.
 	// Super-admin tokens are left unprefixed (raw hex) for backward
@@ -67,6 +72,7 @@ type modLoginEntry struct {
 	tokenHash string // sha256 hash of the one-time link token
 	otp       string
 	userID    int64 // moderator's Telegram user ID (for audit logging)
+	userName  string
 	expiresAt time.Time
 	attempts  int
 }
@@ -74,6 +80,8 @@ type modLoginEntry struct {
 type session struct {
 	token     string
 	expiresAt time.Time
+	actorID   int64
+	actorName string
 }
 
 type failedAttemptInfo struct {
@@ -145,8 +153,9 @@ func (a *AuthManager) CreatePasswordSession() string {
 // given Telegram user ID. It returns the raw link token (to embed in the login
 // URL fragment) and the OTP (delivered separately). Both are required to log
 // in. The challenge is single-use, attempt-limited and expires after
-// modLoginExpiry. Only the token hash is retained server-side.
-func (a *AuthManager) CreateModeratorLogin(userID int64) (token, otp string) {
+// modLoginExpiry. Only the token hash and audit identity are retained
+// server-side; the bearer token and OTP are not persisted.
+func (a *AuthManager) CreateModeratorLogin(userID int64, userName ...string) (token, otp string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -161,10 +170,15 @@ func (a *AuthManager) CreateModeratorLogin(userID int64) (token, otp string) {
 
 	token = generateRandomToken(32)
 	otp = generateRandomCode(otpLength)
+	actorName := ""
+	if len(userName) > 0 {
+		actorName = strings.TrimSpace(userName[0])
+	}
 	active = append(active, &modLoginEntry{
 		tokenHash: hashSessionToken(token),
 		otp:       otp,
 		userID:    userID,
+		userName:  actorName,
 		expiresAt: now.Add(modLoginExpiry),
 	})
 	a.pendingModLogins = active
@@ -197,7 +211,7 @@ func (a *AuthManager) ValidateModeratorLogin(token, code, ip string) (string, er
 		if subtle.ConstantTimeCompare([]byte(e.otp), []byte(code)) == 1 {
 			a.pendingModLogins = append(a.pendingModLogins[:i], a.pendingModLogins[i+1:]...)
 			delete(a.failedAttempts, ip)
-			return a.createSessionWithRole(RoleModerator), nil
+			return a.createSessionWithRole(RoleModerator, e.userID, e.userName), nil
 		}
 		// Wrong OTP for a valid token: burn an attempt and discard the
 		// challenge once the cap is reached so a leaked link can't be brute
@@ -292,21 +306,23 @@ func (a *AuthManager) ValidateSession(token string) bool {
 	}
 
 	tokenHash := hashSessionToken(token)
-	expiresAt, err := db.GetWebSessionExpiry(tokenHash)
+	expiresAt, actorID, actorName, err := db.GetWebSession(tokenHash)
 	if err != nil {
 		log.Printf("auth: failed to look up web session: %v", err)
 		return false
 	}
 	if expiresAt.IsZero() {
-		legacyExpiresAt, legacyErr := db.GetWebSessionExpiry(token)
+		legacyExpiresAt, legacyActorID, legacyActorName, legacyErr := db.GetWebSession(token)
 		if legacyErr != nil {
 			log.Printf("auth: failed to look up legacy web session: %v", legacyErr)
 			return false
 		}
 		if !legacyExpiresAt.IsZero() {
 			expiresAt = legacyExpiresAt
+			actorID = legacyActorID
+			actorName = legacyActorName
 			if legacyExpiresAt.After(time.Now()) {
-				if saveErr := db.SaveWebSession(tokenHash, legacyExpiresAt); saveErr != nil {
+				if saveErr := db.SaveWebSessionActor(tokenHash, legacyExpiresAt, actorID, actorName); saveErr != nil {
 					log.Printf("auth: failed to migrate legacy web session: %v", saveErr)
 				}
 				if deleteErr := db.DeleteWebSession(token); deleteErr != nil {
@@ -330,9 +346,20 @@ func (a *AuthManager) ValidateSession(token string) bool {
 
 	// Cache the validated session in memory for faster subsequent lookups.
 	a.mu.Lock()
-	a.sessions[token] = &session{token: token, expiresAt: expiresAt}
+	a.sessions[token] = &session{token: token, expiresAt: expiresAt, actorID: actorID, actorName: actorName}
 	a.mu.Unlock()
 	return true
+}
+
+// SessionActor returns the authenticated actor bound to a validated session.
+func (a *AuthManager) SessionActor(token string) (int64, string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s, ok := a.sessions[token]
+	if !ok || s.expiresAt.Before(time.Now()) || s.actorID == 0 {
+		return 0, "", false
+	}
+	return s.actorID, s.actorName, true
 }
 
 // Logout invalidates the given session token.
@@ -405,7 +432,7 @@ func (a *AuthManager) createSession() string {
 // prefix. Super-admin sessions use the unprefixed createSession for backward
 // compatibility; only moderator sessions are prefixed. Must be called with
 // a.mu held.
-func (a *AuthManager) createSessionWithRole(role string) string {
+func (a *AuthManager) createSessionWithRole(role string, userID int64, userName string) string {
 	if role != RoleModerator {
 		return a.createSession()
 	}
@@ -414,9 +441,11 @@ func (a *AuthManager) createSessionWithRole(role string) string {
 	a.sessions[token] = &session{
 		token:     token,
 		expiresAt: expiresAt,
+		actorID:   userID,
+		actorName: userName,
 	}
 	if a.db != nil {
-		if err := a.db.SaveWebSession(hashSessionToken(token), expiresAt); err != nil {
+		if err := a.db.SaveWebSessionActor(hashSessionToken(token), expiresAt, userID, userName); err != nil {
 			log.Printf("auth: failed to persist moderator web session: %v", err)
 		}
 	}

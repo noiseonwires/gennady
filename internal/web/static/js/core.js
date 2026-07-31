@@ -104,12 +104,14 @@ const EVENT_LABELS = {
     daily_summary: 'Daily Summary',
     message_cleanup: 'Message Cleanup',
     database_cleanup: 'Database Cleanup',
+    database_backup: 'Database Backup',
     user_profiles: 'User Profiles'
 };
 
 function eventDisplayName(name) {
     if (EVENT_LABELS[name]) return EVENT_LABELS[name];
     if (name && name.startsWith('rss_')) return 'RSS Feed (' + name.slice(4, 12) + ')';
+    if (name && name.startsWith('watch_')) return 'Website Watch (' + name.slice(6, 14) + ')';
     return name ? name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : name;
 }
 

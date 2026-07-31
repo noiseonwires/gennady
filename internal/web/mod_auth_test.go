@@ -15,13 +15,13 @@ import (
 
 func TestSessionRole(t *testing.T) {
 	assert.Equal(t, RoleModerator, sessionRole(moderatorTokenPrefix+"deadbeef"))
-	assert.Equal(t, RoleSuper, sessionRole("deadbeef"))            // legacy raw-hex token
-	assert.Equal(t, RoleSuper, sessionRole(""))                   // no token
+	assert.Equal(t, RoleSuper, sessionRole("deadbeef")) // legacy raw-hex token
+	assert.Equal(t, RoleSuper, sessionRole(""))         // no token
 }
 
 func TestModeratorLogin_SuccessIssuesModeratorSession(t *testing.T) {
 	a := NewAuthManager(nil)
-	token, otp := a.CreateModeratorLogin(42)
+	token, otp := a.CreateModeratorLogin(42, "@admin (Admin Name)")
 	require.NotEmpty(t, token)
 	require.Len(t, otp, otpLength)
 
@@ -30,7 +30,26 @@ func TestModeratorLogin_SuccessIssuesModeratorSession(t *testing.T) {
 	require.NotEmpty(t, sess)
 	assert.True(t, strings.HasPrefix(sess, moderatorTokenPrefix), "moderator session must carry the role prefix")
 	assert.Equal(t, RoleModerator, sessionRole(sess))
+	actorID, actorName, ok := a.SessionActor(sess)
+	require.True(t, ok)
+	assert.Equal(t, int64(42), actorID)
+	assert.Equal(t, "@admin (Admin Name)", actorName)
 	assert.True(t, a.ValidateSession(sess))
+}
+
+func TestModeratorSessionActorLoadsFromDB(t *testing.T) {
+	db := newTestDB(t)
+	issuer := NewAuthManager(db)
+	token, otp := issuer.CreateModeratorLogin(42, "@admin (Admin Name)")
+	sessionToken, err := issuer.ValidateModeratorLogin(token, otp, "ip")
+	require.NoError(t, err)
+
+	validator := NewAuthManager(db)
+	require.True(t, validator.ValidateSession(sessionToken))
+	actorID, actorName, ok := validator.SessionActor(sessionToken)
+	require.True(t, ok)
+	assert.Equal(t, int64(42), actorID)
+	assert.Equal(t, "@admin (Admin Name)", actorName)
 }
 
 func TestModeratorLogin_WrongOTPThenCorrectSucceeds(t *testing.T) {

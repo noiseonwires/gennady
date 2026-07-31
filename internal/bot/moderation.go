@@ -129,22 +129,87 @@ func (b *Bot) sendToAdminForModeration(message *tgbotapi.Message, reason string,
 	b.sendModerationToSuperAdmin(moderationText, keyboard)
 }
 
+// reportedMessage identifies the message a complaint is about, together with
+// the details needed to build the manual moderation card for it.
+type reportedMessage struct {
+	messageID int
+	chatID    int64
+	userID    int64
+	threadID  int
+	username  string
+	text      string
+}
+
 // handleReplyModerationTrigger handles moderation when bot is mentioned as reply to a message.
 func (b *Bot) handleReplyModerationTrigger(message *tgbotapi.Message) {
 	if message.ReplyToMessage == nil {
 		return
 	}
 
-	replyToID := message.ReplyToMessage.MessageID
-	chatID := message.Chat.ID
-	targetUserID := message.ReplyToMessage.From.ID
+	b.handleComplaint(message, reportedMessage{
+		messageID: message.ReplyToMessage.MessageID,
+		chatID:    message.Chat.ID,
+		userID:    message.ReplyToMessage.From.ID,
+		threadID:  messageTopic(message),
+		username:  getUserDisplayNameFromUser(message.ReplyToMessage.From),
+		text:      message.ReplyToMessage.Text,
+	})
+}
 
+// handleLinkModerationTrigger handles a complaint made by addressing the bot
+// with a t.me link pointing at another message of the same chat, instead of
+// replying to that message. It returns false when the message carries no such
+// link or when the linked message isn't a reportable one (not recorded in the
+// database, the complaint itself, or one of the bot's own messages).
+func (b *Bot) handleLinkModerationTrigger(message *tgbotapi.Message) bool {
+	if !b.config.IsModerationChat(message.Chat.ID) {
+		return false
+	}
+
+	text := message.Text
+	if text == "" {
+		text = message.Caption
+	}
+	targetID, ok := sameChatMessageLinkTarget(text, message.Chat)
+	if !ok || targetID == message.MessageID {
+		return false
+	}
+
+	info, err := b.db.GetMessageInfo(targetID, message.Chat.ID)
+	if err != nil || info == nil {
+		log.Printf("Link complaint: message %d in chat %d is not tracked in the database - ignoring", targetID, message.Chat.ID)
+		return false
+	}
+	if info.UserID == b.botSelf.ID {
+		return false
+	}
+
+	log.Printf("Bot addressed with a link to message %d of the same chat - triggering moderation", targetID)
+
+	if err := b.db.AddMessageForDeletion(message.MessageID, message.Chat.ID); err != nil {
+		log.Printf("Error adding link complaint message to deletion queue: %v", err)
+	}
+
+	b.handleComplaint(message, reportedMessage{
+		messageID: info.MessageID,
+		chatID:    info.ChatID,
+		userID:    info.UserID,
+		threadID:  info.MessageThreadID,
+		username:  b.getUserDisplayNameByID(info.UserID, info.ChatID),
+		text:      info.Text,
+	})
+	return true
+}
+
+// handleComplaint runs the report flow for the message a user complained about:
+// cross-model re-moderation first, then the manual admin card as a fallback.
+func (b *Bot) handleComplaint(message *tgbotapi.Message, target reportedMessage) {
 	// Before escalating to a human, re-run AI moderation across every distinct
 	// configured model (mirroring the WebUI "moderate again" action). When any
 	// model now flags the reported message the matching auto-moderation actions
 	// are dispatched and we stop here without bothering the admins.
-	if b.remoderateReportedMessage(message) {
-		log.Printf("Reply complaint: message %d in chat %d flagged by cross-model re-moderation; acted automatically", replyToID, chatID)
+	if b.remoderateReportedMessage(target) {
+		log.Printf("Complaint: message %d in chat %d flagged by cross-model re-moderation; acted automatically", target.messageID, target.chatID)
 		return
 	}
 
@@ -152,20 +217,17 @@ func (b *Bot) handleReplyModerationTrigger(message *tgbotapi.Message) {
 	// Fall back to manual moderation unless it's disabled in config, in which
 	// case the complaint ends here.
 	if !b.config.AI.ContentModeration.IsComplaintManualModeration() {
-		log.Printf("Reply complaint: message %d in chat %d cleared by all models and manual moderation is disabled; nothing to do", replyToID, chatID)
-		b.setMessageReaction(chatID, message.MessageID, b.config.Reactions.ReportAcknowledged)
+		log.Printf("Complaint: message %d in chat %d cleared by all models and manual moderation is disabled; nothing to do", target.messageID, target.chatID)
+		b.setMessageReaction(message.Chat.ID, message.MessageID, b.config.Reactions.ReportAcknowledged)
 		return
 	}
 
-	threadID := messageTopic(message)
-	keyboard := b.createModerationKeyboard(chatID, replyToID, targetUserID, threadID, false)
+	keyboard := b.createModerationKeyboard(target.chatID, target.messageID, target.userID, target.threadID, false)
 
-	username := getUserDisplayNameFromUser(message.ReplyToMessage.From)
-
-	violationInfo := b.buildViolationInfo(message.ReplyToMessage.From.ID, message.Chat.ID)
+	violationInfo := b.buildViolationInfo(target.userID, target.chatID)
 
 	responseText := i18n.Tf("mod.complaint",
-		username, message.ReplyToMessage.Text, violationInfo)
+		target.username, target.text, violationInfo)
 
 	responseText = truncateMessage(responseText, MaxTelegramMessageLength)
 
@@ -189,23 +251,24 @@ func (b *Bot) handleReplyModerationTrigger(message *tgbotapi.Message) {
 	}
 
 	if b.config.IsModerationChat(message.Chat.ID) {
-		log.Printf("Report received from moderation chat, user %d reported message %d", message.From.ID, message.ReplyToMessage.MessageID)
+		log.Printf("Report received from moderation chat, user %d reported message %d", message.From.ID, target.messageID)
 	}
 }
 
 // remoderateReportedMessage re-runs AI content moderation across every distinct
 // configured model for the message a user reported (the reply target of a
-// "@bot" complaint). When any model flags it, the matching auto-moderation
-// actions are dispatched and it returns true. It returns false when the message
-// can't be re-moderated (content moderation disabled, message not recorded in
-// the DB, or it carries no text) or when every model clears it - leaving the
-// caller to decide whether to escalate to manual moderation.
-func (b *Bot) remoderateReportedMessage(message *tgbotapi.Message) bool {
-	if message == nil || message.ReplyToMessage == nil || !b.config.AI.ContentModeration.Enabled {
+// "@bot" complaint, or the message its t.me link points at). When any model
+// flags it, the matching auto-moderation actions are dispatched and it returns
+// true. It returns false when the message can't be re-moderated (content
+// moderation disabled, message not recorded in the DB, or it carries no text)
+// or when every model clears it - leaving the caller to decide whether to
+// escalate to manual moderation.
+func (b *Bot) remoderateReportedMessage(target reportedMessage) bool {
+	if !b.config.AI.ContentModeration.Enabled {
 		return false
 	}
-	chatID := message.Chat.ID
-	replyToID := message.ReplyToMessage.MessageID
+	chatID := target.chatID
+	replyToID := target.messageID
 
 	synthetic, messageText, err := b.buildSyntheticMessageFromDB(replyToID, chatID)
 	if err != nil || messageText == "" {

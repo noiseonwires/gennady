@@ -63,6 +63,21 @@ This file is auto-generated. Do not edit manually.
 | `message_deletion.chat_deletion_retention_hours` | `MESSAGE_DELETION_CHAT_DELETION_RETENTION_HOURS` | int | Retention Hours - Delete messages older than this many hours (default: 3) |
 | `message_deletion.cleanup_interval_hours` | `MESSAGE_DELETION_CLEANUP_INTERVAL_HOURS` | int | Cleanup Interval Hours - How often to run the deletion cleanup (default: 3) |
 
+## Night Mode
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `night_mode.enabled` | `NIGHT_MODE_ENABLED` | bool | Enabled - Enable scheduled quiet hours: delete every new message on arrival (without analyzing or storing it) and reply with a notice that self-deletes. Messages from admins and the super-admin are exempt. |
+| `night_mode.start_time` | `NIGHT_MODE_START_TIME` | string | Start Time - Window start in 24-hour HH:MM (e.g. 23:00) |
+| `night_mode.end_time` | `NIGHT_MODE_END_TIME` | string | End Time - Window end in 24-hour HH:MM; earlier than start time = overnight window (e.g. 08:00) |
+| `night_mode.days` | `NIGHT_MODE_DAYS` | []string | Days - Weekdays the quiet period may start on (monday/mon ...); empty = every day. An overnight window is attributed to the day it starts on. |
+| `night_mode.message` | `NIGHT_MODE_MESSAGE` | string | Reply Message - Notice sent in reply to each deleted message; leave empty for a built-in phrase |
+| `night_mode.muted_message` | `NIGHT_MODE_MUTED_MESSAGE` | string | Muted Reply Message - Notice sent to a user auto-muted for flooding during night mode; leave empty for a built-in phrase |
+| `night_mode.reply_delete_seconds` | `NIGHT_MODE_REPLY_DELETE_SECONDS` | int | Reply Delete Seconds - How long the notice stays before it is removed (default: 5) |
+| `night_mode.mute_after_messages` | `NIGHT_MODE_MUTE_AFTER_MESSAGES` | int | Mute After Messages - Mute a user until the window ends once they post more than this many messages during night mode (0 = off) |
+| `night_mode.included_topics` | `NIGHT_MODE_INCLUDED_TOPICS` | []chat_topic | Included Topics - (chat, topic) pairs where night mode applies. Empty = every moderation chat / any topic. |
+| `night_mode.excluded_topics` | `NIGHT_MODE_EXCLUDED_TOPICS` | []chat_topic | Excluded Topics - (chat, topic) pairs that override Included Topics - never affected by night mode. |
+
 ## Database Cleanup
 
 | YAML Key | ENV | Type | Description |
@@ -72,6 +87,36 @@ This file is auto-generated. Do not edit manually.
 | `database_cleanup.warning_retention_hours` | `DATABASE_CLEANUP_WARNING_RETENTION_HOURS` | int | Warning Retention Hours - Keep warning records for this many hours (default: 168) |
 | `database_cleanup.action_retention_hours` | `DATABASE_CLEANUP_ACTION_RETENTION_HOURS` | int | Action Retention Hours - Keep action log records for this many hours (default: 168) |
 | `database_cleanup.preserve_warned_muted_messages` | `DATABASE_CLEANUP_PRESERVE_WARNED_MUTED_MESSAGES` | bool | Preserve Warned/Muted Messages - Keep messages that triggered a warning or an active mute until it is cleared or expires (default: off) |
+
+## Database Backup
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `backup.enabled` | `BACKUP_ENABLED` | bool | Enabled - Periodically copy the database to a backup destination, replacing the previous copy (default: off) |
+| `backup.interval_hours` | `BACKUP_INTERVAL_HOURS` | int | Interval Hours - How often to run the backup, in hours (default: 48) |
+| `backup.file_prefix` | `BACKUP_FILE_PREFIX` | string | File Name Prefix - Prepended to the backup file name so several bot instances can share one destination (e.g. 'chat1_' gives chat1_moderation.db). Only A-Z a-z 0-9 . _ - are kept |
+| `backup.include_config` | `BACKUP_INCLUDE_CONFIG` | bool | Include Configuration - Include the config_values table (contains secrets when the database is the config source) in the backup |
+| `backup.notify_super_admin_on_failure` | `BACKUP_NOTIFY_SUPER_ADMIN_ON_FAILURE` | bool | Notify Super-Admin On Failure - DM the super-admin with the error details when a scheduled backup fails. Requires admin.super_admin_user_id (default: off) |
+| `backup.temp_dir` | `BACKUP_TEMP_DIR` | string | Temp Directory - Scratch folder for the intermediate snapshot, which is deleted right after the upload. Defaults to the folder of the local database path, falling back to the system temp dir when that is not writable (common in containers) |
+| `backup.target` | `BACKUP_TARGET` | string | Destination - Where to copy the backup: local, webdav or bunny (default: local) |
+| `backup.local_path` | `BACKUP_LOCAL_PATH` | string | Local Folder - Destination folder for the 'local' destination (default: ./backups) |
+
+## Database Backup - WebDAV
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `backup.webdav.url` | `BACKUP_WEBDAV_URL` | string | WebDAV URL - Full collection URL, e.g. https://cloud.example.com/remote.php/dav/files/user/backups |
+| `backup.webdav.username` | `BACKUP_WEBDAV_USERNAME` | string | WebDAV Username - User name for WebDAV basic authentication |
+| `backup.webdav.password` | `BACKUP_WEBDAV_PASSWORD` | string 🔒 | WebDAV Password - Password or app token for WebDAV basic authentication |
+
+## Database Backup - Bunny Storage
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `backup.bunny.endpoint` | `BACKUP_BUNNY_ENDPOINT` | string | Storage Endpoint - Hostname for your storage zone's primary region: storage.bunnycdn.com (Frankfurt, default), uk/ny/la/sg/se/br/jh/syd.storage.bunnycdn.com. Shown on the zone's Access page |
+| `backup.bunny.storage_zone` | `BACKUP_BUNNY_STORAGE_ZONE` | string | Storage Zone - Name of the bunny.net storage zone |
+| `backup.bunny.access_key` | `BACKUP_BUNNY_ACCESS_KEY` | string 🔒 | Access Key - The storage zone password from the FTP & API Access tab - NOT your account API key |
+| `backup.bunny.path` | `BACKUP_BUNNY_PATH` | string | Folder - Optional folder inside the storage zone, e.g. gennady/backups (created automatically) |
 
 ## Scheduled Events
 
@@ -187,8 +232,8 @@ This file is auto-generated. Do not edit manually.
 | `ai.creative_replies.reply_chain_depth` | `AI_CREATIVE_REPLIES_REPLY_CHAIN_DEPTH` | int | Reply Chain Depth - Max messages to follow up the reply chain for dialog history context (default: 5) |
 | `ai.creative_replies.reply_chain_max_age_hours` | `AI_CREATIVE_REPLIES_REPLY_CHAIN_MAX_AGE_HOURS` | int | Reply Chain Max Age (hours) - Stop walking the reply chain once a message is older than this many hours (default: 6) |
 | `ai.creative_replies.reply_chain_adjacent_window` | `AI_CREATIVE_REPLIES_REPLY_CHAIN_ADJACENT_WINDOW` | int | Reply Chain Adjacent Window - Pick up other messages from chain participants whose message ID lies within this many slots around chain messages (0 = disabled). Age is bounded by reply_chain_max_age_hours. |
-| `ai.creative_replies.prompt.system` | `AI_CREATIVE_REPLIES_PROMPT_SYSTEM` | string | Creative Reply (System) - System prompt for creative reply generation (placeholders: `{{message}}`, `{{context}}`, `{{quote}}`) |
-| `ai.creative_replies.prompt.user` | `AI_CREATIVE_REPLIES_PROMPT_USER` | string | Creative Reply (User) - User prompt for creative reply generation (placeholders: `{{message}}`, `{{context}}`, `{{quote}}`) |
+| `ai.creative_replies.prompt.system` | `AI_CREATIVE_REPLIES_PROMPT_SYSTEM` | string | Creative Reply (System) - System prompt for creative reply generation (placeholders: `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}`) |
+| `ai.creative_replies.prompt.user` | `AI_CREATIVE_REPLIES_PROMPT_USER` | string | Creative Reply (User) - User prompt for creative reply generation (placeholders: `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}`) |
 
 ## AI Morning Greeting
 
@@ -272,6 +317,18 @@ This file is auto-generated. Do not edit manually.
 | `ai.rss.translation_prompt.user` | `AI_RSS_TRANSLATION_PROMPT_USER` | string | RSS Translation (User) - User prompt for RSS feed translation (falls back to ai.translation_prompt) (placeholders: `{{text}}`) |
 | `ai.rss.summary_prompt.system` | `AI_RSS_SUMMARY_PROMPT_SYSTEM` | string | RSS Summary (System) - System prompt for RSS feed summarization (placeholders: `{{text}}`) |
 | `ai.rss.summary_prompt.user` | `AI_RSS_SUMMARY_PROMPT_USER` | string | RSS Summary (User) - User prompt for RSS feed summarization (placeholders: `{{text}}`) |
+
+## Website Watch
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `ai.website_watch.use_full_model` | `AI_WEBSITE_WATCH_USE_FULL_MODEL` | bool | Use Full Model - Use the full model instead of the light one to analyze page changes |
+| `ai.website_watch.light_model_threshold` | `AI_WEBSITE_WATCH_LIGHT_MODEL_THRESHOLD` | int | Light Model Threshold - Force the light model when the diff exceeds this character count (0 = disabled) |
+| `ai.website_watch.max_content_length` | `AI_WEBSITE_WATCH_MAX_CONTENT_LENGTH` | int | Max Content Length - How much extracted page text is stored and compared, in characters (default 8192) |
+| `ai.website_watch.max_diff_length` | `AI_WEBSITE_WATCH_MAX_DIFF_LENGTH` | int | Max Diff Length - How much of the diff is sent to the AI, in characters (default 4096) |
+| `ai.website_watch.no_changes_marker` | `AI_WEBSITE_WATCH_NO_CHANGES_MARKER` | string | No-Changes Marker - The exact answer the AI must return when a change is not worth reporting; nothing is posted then (default NO_CHANGES) |
+| `ai.website_watch.prompt.system` | `AI_WEBSITE_WATCH_PROMPT_SYSTEM` | string | Website Change (System) - System prompt for describing what changed on a watched page (placeholders: `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}`) |
+| `ai.website_watch.prompt.user` | `AI_WEBSITE_WATCH_PROMPT_USER` | string | Website Change (User) - User prompt for describing what changed on a watched page (placeholders: `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}`) |
 
 ## AI User Profiles
 

@@ -91,8 +91,8 @@ type Bot struct {
 	telegramStatus TelegramStatusReporter
 	generateWebOTP func() string
 	// generateModeratorLogin mints a one-time moderator web UI login bound to a
-	// Telegram user ID, returning the link token and OTP to deliver privately.
-	generateModeratorLogin func(userID int64) (token, otp string)
+	// Telegram identity, returning the link token and OTP to deliver privately.
+	generateModeratorLogin func(userID int64, userName string) (token, otp string)
 	httpMux                *http.ServeMux
 
 	forcedGC bool // explicit GC after each event, enabled via FORCED_GC env
@@ -113,8 +113,21 @@ type Bot struct {
 	callbackDedupMu sync.Mutex
 	callbackDedup   map[string]time.Time
 
+	// Deduplication: track non-callback Telegram update IDs already claimed so
+	// webhook retries cannot run message side effects more than once.
+	updateDedupMu sync.Mutex
+	updateDedup   map[int64]time.Time
+
 	// Bounded, TTL'd in-memory cache of user profiles for moderation prompts.
 	profileCache *userProfileCache
+
+	// Night-mode flood tracking: per (chat, user) message counts within the
+	// current quiet-hours window. When the active window changes, the whole map
+	// is reset (nightMuteWindow tracks which window end the counts belong to),
+	// so it stays bounded to one window's participants.
+	nightMuteMu     sync.Mutex
+	nightMuteWindow time.Time
+	nightMuteCounts map[nightModeKey]int
 
 	// Built-once pipeline definitions (the ordered stages and the side-feature
 	// registry). Rebuilding them per message would allocate ~10 method-value
@@ -154,8 +167,8 @@ func (b *Bot) SetWebOTPGenerator(fn func() string) {
 }
 
 // SetModeratorLoginGenerator sets the function that mints a one-time moderator
-// web UI login (link token + OTP) bound to a Telegram user ID.
-func (b *Bot) SetModeratorLoginGenerator(fn func(userID int64) (token, otp string)) {
+// web UI login (link token + OTP) bound to a Telegram identity.
+func (b *Bot) SetModeratorLoginGenerator(fn func(userID int64, userName string) (token, otp string)) {
 	b.generateModeratorLogin = fn
 }
 
@@ -251,6 +264,7 @@ func New(cfg *config.Config, db *database.DB) (*Bot, error) {
 		topicDir:      newTopicDirectory(),
 		moderatedMsgs: make(map[string]time.Time),
 		callbackDedup: make(map[string]time.Time),
+		updateDedup:   make(map[int64]time.Time),
 		profileCache:  newUserProfileCache(),
 	}
 

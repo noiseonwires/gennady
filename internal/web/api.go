@@ -97,13 +97,13 @@ type ChatLister interface {
 // Moderator is implemented by the bot to perform moderation actions
 // (mute / cruel mute / unmute / warn) initiated from the web UI.
 type Moderator interface {
-	WebMuteUser(userID, chatID int64, messageID int, durationMinutes int) error
-	WebCruelMuteUser(userID, chatID int64, messageID int, durationMinutes int) error
-	WebUnmuteUser(userID, chatID int64) error
-	WebWarnUser(userID, chatID int64, messageID int) error
-	WebDeleteUserMessages(userID, chatID int64, period string) (int, error)
-	WebDeleteMessage(userID, chatID int64, messageID int) error
-	WebRemoderateMessage(userID, chatID int64, messageID int) error
+	WebMuteUser(userID, chatID int64, messageID int, durationMinutes int, actorID int64, actorName string) error
+	WebCruelMuteUser(userID, chatID int64, messageID int, durationMinutes int, actorID int64, actorName string) error
+	WebUnmuteUser(userID, chatID, actorID int64, actorName string) error
+	WebWarnUser(userID, chatID int64, messageID int, actorID int64, actorName string) error
+	WebDeleteUserMessages(userID, chatID int64, period string, actorID int64, actorName string) (int, error)
+	WebDeleteMessage(userID, chatID int64, messageID int, actorID int64, actorName string) error
+	WebRemoderateMessage(userID, chatID int64, messageID int, actorID int64, actorName string) error
 }
 
 // apiHandler groups dependencies used by all API routes.
@@ -301,6 +301,15 @@ func (h *apiHandler) handleGetRssFeeds(w http.ResponseWriter, r *http.Request) {
 		feeds = []config.RssFeed{}
 	}
 	jsonResponse(w, feeds)
+}
+
+// handleGetWatchedSites returns the list of monitored websites.
+func (h *apiHandler) handleGetWatchedSites(w http.ResponseWriter, r *http.Request) {
+	sites := h.config.AI.WebsiteWatch.Sites
+	if sites == nil {
+		sites = []config.WatchedSite{}
+	}
+	jsonResponse(w, sites)
 }
 
 // handleGetTopics returns the static forum-topic name registry (config `topics`).
@@ -502,6 +511,34 @@ func (h *apiHandler) handleSaveRssFeeds(w http.ResponseWriter, r *http.Request) 
 	}
 
 	log.Printf("WebUI: RSS feeds updated (%d feeds)", len(feeds))
+	jsonResponse(w, map[string]string{"status": "ok"})
+}
+
+// handleSaveWatchedSites replaces the list of monitored websites. Schedules are
+// picked up on the next restart, like RSS feeds.
+func (h *apiHandler) handleSaveWatchedSites(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		writeWebErr(w, errMethodNotAllowed)
+		return
+	}
+
+	sites, err := decodeJSON[[]config.WatchedSite](r)
+	if err != nil {
+		respondDecodeError(w, err)
+		return
+	}
+
+	config.Lock()
+	h.config.AI.WebsiteWatch.Sites = sites
+	config.Unlock()
+
+	if err := h.persistConfig(); err != nil {
+		log.Printf("⚠️  Failed to save config: %v", err)
+		writeWebErrf(w, errConfigSaveFailed, "failed to save config: %v", err)
+		return
+	}
+
+	log.Printf("WebUI: watched websites updated (%d sites)", len(sites))
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
 

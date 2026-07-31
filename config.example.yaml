@@ -72,6 +72,31 @@ message_deletion:
   chat_deletion_retention_hours: 3  # delete messages older than N hours
   cleanup_interval_hours: 3         # run deletion routine every N hours
 
+# ─── Night Mode (quiet hours) ───────────────────────────────────────
+# While the window is active, every NEW message in the covered chats/topics is
+# deleted on arrival - it is NOT analyzed or stored - and the bot replies with a
+# short notice that is itself removed after reply_delete_seconds. Messages from
+# admins (and the super-admin), the Telegram service account (777000), edits and
+# service messages are left alone. Uses the server's local time (set the TZ so
+# it matches your chat's timezone).
+night_mode:
+  enabled: false
+  start_time: "23:00"               # window start, 24h HH:MM
+  end_time: "08:00"                 # window end; earlier than start = overnight
+  # Weekdays the quiet period may START on (an overnight window listed for "fri"
+  # runs Fri 23:00 → Sat 08:00). Names are case-insensitive, full or 3-letter.
+  # Empty = every day.
+  #   days: [mon, tue, wed, thu, fri]
+  days: []
+  message: ""                       # reply notice; empty = built-in phrase
+  muted_message: ""                 # notice for a user auto-muted for flooding; empty = built-in phrase
+  reply_delete_seconds: 5           # how long the notice stays before removal
+  mute_after_messages: 0            # >0: mute a user until the window ends after they post more than N messages (0 = off)
+  # Where night mode applies. Empty = every moderation chat, any topic.
+  included_topics: []
+  # Pairs that override included_topics - never affected by night mode.
+  excluded_topics: []
+
 # ─── Database Cleanup ───────────────────────────────────────────────
 database_cleanup:
   cleanup_interval_hours: 24        # run DB cleanup every N hours
@@ -79,6 +104,39 @@ database_cleanup:
   warning_retention_hours: 168
   action_retention_hours: 168
   preserve_warned_muted_messages: false  # keep messages that caused a warn/active mute until it is cleared/expired
+
+# ─── Database Backup ────────────────────────────────────────────────
+# Periodically copies the whole database to a folder, a WebDAV server or a
+# bunny.net Edge Storage zone, replacing the previous copy each time. For a
+# local database the live SQLite file is copied (after a WAL checkpoint); for a
+# remote database the data is exported into a fresh SQLite file first - the same
+# thing the web UI "Download DB" button does.
+backup:
+  enabled: false
+  interval_hours: 48                # run every N hours
+  file_prefix: ""                   # prepended to "moderation.db" (e.g. "chat1_" → chat1_moderation.db)
+  include_config: true              # include the config_values table (contains secrets when DB is the config source)
+  notify_super_admin_on_failure: false  # DM the super-admin with details when a scheduled backup fails
+  # Scratch space for the snapshot; the file is deleted right after the upload.
+  # Defaults to the folder of database.path, falling back to the system temp dir
+  # when that is not writable. In containers (especially with a remote database,
+  # where database.path may point at a folder that was never created) set this to
+  # a path the bot can write, e.g. "./" or "/tmp".
+  # temp_dir: ""
+
+  target: "local"                   # "local", "webdav" or "bunny"
+  local_path: "./backups"           # destination folder for target: local
+
+  # webdav:
+  #   url: "https://cloud.example.com/remote.php/dav/files/user/backups"
+  #   username: ""
+  #   password: ""
+
+  # bunny:                                 # bunny.net Edge Storage
+  #   endpoint: "storage.bunnycdn.com"     # region host: storage / uk / ny / la / sg / se / br / jh / syd
+  #   storage_zone: "my-zone"
+  #   access_key: ""                       # storage zone password (FTP & API Access tab), NOT the account API key
+  #   path: "gennady/backups"              # optional folder inside the zone
 
 # ─── Scheduled Events (missed event recovery) ─────────────────────
 scheduled_events:
@@ -177,8 +235,13 @@ ai:
   #                       is the model id (e.g. gpt-4o), auth via Bearer token.
   # When `provider` is omitted it is auto-detected: endpoints containing "azure"
   # → azure, everything else → openai.
+  #
+  # Each entry also accepts `enabled` (default true). Setting it to false keeps
+  # the entry in the config but excludes it from every AI call and from the
+  # failover rotation — handy for parking a model without deleting its settings.
   light_model:
     - provider: "azure"
+      enabled: true
       endpoint: "https://YOUR_ENDPOINT.openai.azure.com/"
       api_key: "KEY_HERE"
       deployment_name: "gpt-4o-mini"
@@ -189,12 +252,14 @@ ai:
   # Example below mixes an Azure primary with an OpenAI fallback.
   full_model:
     - provider: "azure"
+      enabled: true
       endpoint: "https://YOUR_PRIMARY.openai.azure.com/"
       api_key: "KEY_HERE"
       deployment_name: "gpt-4o"
       temperature: 0.7
       omit_max_tokens: false
     - provider: "openai"
+      enabled: true
       endpoint: "https://api.openai.com/v1"
       api_key: "sk-YOUR_OPENAI_KEY"
       deployment_name: "gpt-4o"
@@ -541,6 +606,50 @@ ai:
         Preserve key facts and the essence.
 
         {{text}}
+
+  # ── Website Watch ──
+  # RSS for pages that have no feed. Each site is fetched on its own schedule,
+  # converted to text, compared with the last reported snapshot, and the diff is
+  # handed to the AI. The AI either describes the change or answers with
+  # no_changes_marker - in that case nothing is posted. The stored snapshot only
+  # advances when a change was actually reported, so slow, piecemeal edits still
+  # add up to a report instead of quietly becoming the new baseline.
+  # Tune the prompt to suppress false positives (ads, counters, "last updated" lines).
+  website_watch:
+    use_full_model: true
+    light_model_threshold: 8192   # switch to light model if the diff exceeds this length (0 = disabled)
+    max_content_length: 8192      # how much page text is stored and compared
+    max_diff_length: 4096         # how much of the diff is sent to the AI
+    no_changes_marker: "NO_CHANGES"
+    sites:
+      - name: "Example Rules Page"
+        url: "https://example.com/rules"
+        enabled: false
+        interval_hours: 12       # check every N hours; 0 = use the daily time below
+        time: "09:00"            # daily check time (HH:MM), used when interval_hours is 0
+        # Where to publish change reports. Empty = every moderation chat, main area.
+        #   post_to: [{chat: -100111, topic: 7}]
+        post_to: []
+        max_message_length: 0    # truncate threshold in chars (0 = Telegram limit, 4096)
+
+    # Variables: {{name}}, {{url}}, {{diff}}, {{previous}}, {{current}}, {{marker}}
+    # {{diff}} lines starting with "-" are removed text, "+" added text.
+    prompt:
+      system: |
+        You track changes on web pages. You are given a word-level diff between the
+        previously reported version of a page and the current one.
+        Report only meaningful changes to the page's substance: new or removed
+        entries, changed dates, prices, rules, statuses, announcements.
+        Ignore noise: advertising, view counters, "last updated" stamps, cookie
+        banners, navigation, reordering, and purely cosmetic rewording.
+        If nothing meaningful changed, answer with exactly {{marker}} and nothing else.
+        Otherwise answer with 1-4 short sentences describing what changed. No preamble.
+      user: |
+        Page: {{name}}
+        URL: {{url}}
+
+        Diff ("-" = removed, "+" = added):
+        {{diff}}
 
   # ── User Profiles ──
   # Daily task that analyzes each active user's messages and builds/updates

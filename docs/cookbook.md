@@ -85,13 +85,14 @@ Placeholders are replaced before the prompt is sent. Each prompt only supports i
 | --- | --- |
 | `content_moderation.prompt` | `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reply_to}}`, `{{new_user_rules}}` |
 | `content_moderation.warning_prompt` | `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{reputation}}` |
-| `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}` |
+| `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}` |
 | `morning_greeting.prompt` | `{{weekday}}`, `{{date}}`, `{{weather}}`, `{{weather_ru}}`, `{{holidays}}`, `{{events}}` |
 | `daily_summary.prompt` | `{{messages}}` |
 | `message_summaries.prompt` | `{{message}}` |
 | `link_summaries.prompt` | `{{title}}`, `{{url}}`, `{{content}}`, `{{truncated_suffix}}` |
 | `user_profiles.prompt` | `{{username}}`, `{{messages}}` |
 | `user_profiles.update_prompt` | `{{username}}`, `{{messages}}`, `{{existing_profile}}` |
+| `website_watch.prompt` | `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}` |
 | `translation_prompt` / `rss.*` | `{{text}}` |
 
 **`{{user_profile}}` vs `{{user_reputation}}`:**
@@ -105,6 +106,9 @@ Placeholders are replaced before the prompt is sent. Each prompt only supports i
 
 Both are empty unless `ai.user_profiles.enabled: true` (or
 `content_moderation.new_user_profile_check_enabled: true`).
+
+Both also work in `creative_replies.prompt`, so the bot can tailor its banter to who it is
+replying to (e.g. go easy on newcomers, tease the regulars).
 
 **`{{new_user_rules}}`:** expands to your `ai.content_moderation.new_user_rules` text **only**
 while a user is "new" - within `ai.content_moderation.new_user_window_hours` (default 24) of

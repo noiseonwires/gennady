@@ -154,6 +154,8 @@ var (
 	errLocalDBPathNotSet        = webError{code: "files.local_db_path_not_set", msg: "local database path is not configured", status: http.StatusBadRequest}
 	errLocalDBPathNotWritable   = webError{code: "files.local_db_path_not_writable", msg: "local database path is not writable", status: http.StatusInternalServerError}
 	errLocalDBFileMissing       = webError{code: "files.local_db_file_missing", msg: "local database file not found", status: http.StatusBadRequest}
+
+	errBackupFailed = webError{code: "files.backup_failed", msg: "database backup failed", status: http.StatusInternalServerError}
 )
 
 // System

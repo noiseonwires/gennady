@@ -157,6 +157,38 @@ func TestHandleSaveRssFeeds_BadJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
+func TestHandleGetWatchedSites_Empty(t *testing.T) {
+	h := newTestHandler(t, newTestConfig())
+	rr := get(t, h, h.handleGetWatchedSites, "/api/config/website-watch")
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "[]\n", rr.Body.String())
+}
+
+func TestHandleSaveWatchedSites(t *testing.T) {
+	h := newTestHandlerWithFile(t, newTestConfig())
+	rr := httptest.NewRecorder()
+	h.handleSaveWatchedSites(rr, putJSON("/api/config/website-watch",
+		`[{"name":"Rules","url":"https://example.com/rules","enabled":true,"interval_hours":12}]`))
+	assert.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, h.config.AI.WebsiteWatch.Sites, 1)
+	assert.Equal(t, "Rules", h.config.AI.WebsiteWatch.Sites[0].Name)
+	assert.Equal(t, 12, h.config.AI.WebsiteWatch.Sites[0].IntervalHours)
+}
+
+func TestHandleSaveWatchedSites_MethodNotAllowed(t *testing.T) {
+	h := newTestHandler(t, newTestConfig())
+	rr := httptest.NewRecorder()
+	h.handleSaveWatchedSites(rr, httptest.NewRequest(http.MethodGet, "/api/config/website-watch", nil))
+	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+func TestHandleSaveWatchedSites_BadJSON(t *testing.T) {
+	h := newTestHandler(t, newTestConfig())
+	rr := httptest.NewRecorder()
+	h.handleSaveWatchedSites(rr, putJSON("/api/config/website-watch", "x"))
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
 func TestHandleGetTopics_Empty(t *testing.T) {
 	h := newTestHandler(t, newTestConfig())
 	rr := get(t, h, h.handleGetTopics, "/api/config/topics")

@@ -58,6 +58,10 @@ func setDefaults(config *Config) {
 	if config.MessageDeletion.CleanupIntervalHours == 0 {
 		config.MessageDeletion.CleanupIntervalHours = 3
 	}
+	// Night mode defaults
+	if config.NightMode.ReplyDeleteSeconds == 0 {
+		config.NightMode.ReplyDeleteSeconds = 5
+	}
 	// Database cleanup defaults
 	if config.DatabaseCleanup.CleanupIntervalHours == 0 {
 		config.DatabaseCleanup.CleanupIntervalHours = 24
@@ -70,6 +74,20 @@ func setDefaults(config *Config) {
 	}
 	if config.DatabaseCleanup.ActionRetentionHours == 0 {
 		config.DatabaseCleanup.ActionRetentionHours = 168
+	}
+	// Database backup defaults
+	if config.Backup.IntervalHours == 0 {
+		config.Backup.IntervalHours = 48
+	}
+	config.Backup.Target = strings.ToLower(strings.TrimSpace(config.Backup.Target))
+	if config.Backup.Target == "" {
+		config.Backup.Target = "local"
+	}
+	if config.Backup.Target == "local" && strings.TrimSpace(config.Backup.LocalPath) == "" {
+		config.Backup.LocalPath = "./backups"
+	}
+	if strings.TrimSpace(config.Backup.Bunny.Endpoint) == "" {
+		config.Backup.Bunny.Endpoint = "storage.bunnycdn.com"
 	}
 	// Update-processing defaults
 	if config.UpdateProcessing.Workers <= 0 {
@@ -131,6 +149,16 @@ func setDefaults(config *Config) {
 	// RSS translation prompt falls back to generic translation prompt
 	if config.AI.Rss.TranslationPrompt.System == "" && config.AI.Rss.TranslationPrompt.User == "" {
 		config.AI.Rss.TranslationPrompt = config.AI.TranslationPrompt
+	}
+	// Website watch defaults
+	if config.AI.WebsiteWatch.MaxContentLength == 0 {
+		config.AI.WebsiteWatch.MaxContentLength = 8192
+	}
+	if config.AI.WebsiteWatch.MaxDiffLength == 0 {
+		config.AI.WebsiteWatch.MaxDiffLength = 4096
+	}
+	if config.AI.WebsiteWatch.NoChangesMarker == "" {
+		config.AI.WebsiteWatch.NoChangesMarker = "NO_CHANGES"
 	}
 	// Server defaults
 	if config.Server.ListenAddr == "" {

@@ -78,12 +78,23 @@ func (c *ChatIDList) All() []int64 {
 
 // AIModelConfig represents configuration for an AI model endpoint.
 type AIModelConfig struct {
-	Provider       string   `yaml:"provider,omitempty" json:"provider,omitempty"` // "azure" or "openai" (auto-detected from endpoint when empty)
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"` // "azure" or "openai" (auto-detected from endpoint when empty)
+	// Enabled gates whether this endpoint may be used at all. Omitting it
+	// (nil) means enabled, so configs written before this field existed keep
+	// working unchanged. A disabled entry stays in the config (and in the Web
+	// UI) but is skipped by every model-selection path.
+	Enabled        *bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Endpoint       string   `yaml:"endpoint" json:"endpoint"`
 	APIKey         string   `yaml:"api_key" json:"api_key" web:"sensitive"`
 	DeploymentName string   `yaml:"deployment_name" json:"deployment_name"`
 	Temperature    *float64 `yaml:"temperature,omitempty" json:"temperature"`
 	OmitMaxTokens  bool     `yaml:"omit_max_tokens" json:"omit_max_tokens"`
+}
+
+// IsEnabled reports whether this model endpoint may be used. An unset flag
+// means enabled (backward compatibility with configs that predate the field).
+func (m AIModelConfig) IsEnabled() bool {
+	return m.Enabled == nil || *m.Enabled
 }
 
 // ResolveProvider returns the effective provider for this model. When Provider
@@ -129,15 +140,42 @@ func (a AIModelConfigs) MarshalYAML() (interface{}, error) {
 	return a.Configs, nil
 }
 
+// Get returns the enabled model at index (wrapping around), so retry/failover
+// loops never land on a disabled endpoint. When nothing is enabled it returns
+// an explicitly disabled placeholder, which callers reject before issuing a
+// request.
 func (a *AIModelConfigs) Get(index int) AIModelConfig {
-	if len(a.Configs) == 0 {
-		return AIModelConfig{}
+	n := a.Count()
+	if n == 0 {
+		disabled := false
+		return AIModelConfig{Enabled: &disabled}
 	}
-	return a.Configs[index%len(a.Configs)]
+	if index < 0 {
+		index = -index
+	}
+	target := index % n
+	i := 0
+	for _, c := range a.Configs {
+		if !c.IsEnabled() {
+			continue
+		}
+		if i == target {
+			return c
+		}
+		i++
+	}
+	return AIModelConfig{}
 }
 
+// Count returns the number of enabled model endpoints.
 func (a *AIModelConfigs) Count() int {
-	return len(a.Configs)
+	n := 0
+	for _, c := range a.Configs {
+		if c.IsEnabled() {
+			n++
+		}
+	}
+	return n
 }
 
 // ChatTopicRef identifies a specific (chat, topic) pair.

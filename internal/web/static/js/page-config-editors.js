@@ -155,6 +155,93 @@ function rssFeedsEditor() {
     };
 }
 
+/* Watched Websites Editor - RSS-like monitoring of pages without a feed.
+ * Mirrors rssFeedsEditor(); schedule is either interval_hours or a daily time. */
+function watchedSitesEditor() {
+    return {
+        sites: [],
+        saving: false,
+        loading: false,
+        msg: '',
+        msgClass: 'save-msg',
+
+        get chats() {
+            return Alpine.store('app').chats || [];
+        },
+
+        defaultChatID() {
+            return this.chats.length === 1 ? Number(this.chats[0].id) : 0;
+        },
+
+        ensurePostTo(site) {
+            if (!Array.isArray(site.post_to)) site.post_to = [];
+            return site.post_to;
+        },
+
+        addPostTo(site) {
+            this.ensurePostTo(site).push({ chat: this.defaultChatID(), topic: 0 });
+        },
+
+        removePostTo(site, i) {
+            this.ensurePostTo(site).splice(i, 1);
+        },
+
+        topicMode(item) {
+            return (item && Number(item.topic) > 0) ? 'specific' : 'main';
+        },
+
+        setTopicMode(item, mode) {
+            if (mode === 'main') { item.topic = 0; return; }
+            if (!Number.isInteger(Number(item.topic)) || Number(item.topic) <= 0) item.topic = 1;
+        },
+
+        add() {
+            this.sites.push({ name: '', url: '', enabled: true, time: '12:00', interval_hours: 0, max_message_length: 0, post_to: [] });
+        },
+
+        async load() {
+            this.loading = true;
+            try {
+                const sites = await apiJSON('/api/config/website-watch') || [];
+                this.sites = sites.map(s => ({
+                    ...s,
+                    interval_hours: Number(s.interval_hours) || 0,
+                    post_to: Array.isArray(s.post_to) ? s.post_to.map(t => ({
+                        chat: Number(t.chat) || 0,
+                        topic: Number(t.topic),
+                    })) : [],
+                }));
+            } catch {}
+            this.loading = false;
+        },
+
+        async save() {
+            this.saving = true;
+            try {
+                const payload = this.sites.map(s => ({
+                    ...s,
+                    interval_hours: Number(s.interval_hours) || 0,
+                    max_message_length: Number(s.max_message_length) || 0,
+                    post_to: (s.post_to || []).map(t => ({
+                        chat: Number(t.chat) || 0,
+                        topic: Number(t.topic),
+                    })),
+                }));
+                const r = await api('/api/config/website-watch', { method: 'PUT', body: JSON.stringify(payload) });
+                if (r.ok) {
+                    flashMsg(this, Alpine.store('i18n').t('cfg_saved'), true);
+                } else {
+                    const d = await r.json();
+                    flashMsg(this, Alpine.store('i18n').err(d) || Alpine.store('i18n').t('cfg_error'), false);
+                }
+            } catch {
+                flashMsg(this, Alpine.store('i18n').t('cfg_error'), false);
+            }
+            this.saving = false;
+        }
+    };
+}
+
 /* Topic Names Editor
  * Edits the static forum-topic name registry (config `topics`). Each row maps
  * a (chat, forum thread id) pair to a human-readable name, shown in moderation
@@ -296,8 +383,9 @@ function modelEditor(which) {
             try {
                 const data = await apiJSON('/api/config/models');
                 const arr = data[which + '_model'] || [];
-                this.models = arr.length ? arr.map(m => ({ ...m, _show: false }))
-                    : [{ provider: '', endpoint: '', api_key: '', deployment_name: '', temperature: null, omit_max_tokens: false, _show: false }];
+                // `enabled` is omitted by the API when unset, which means enabled.
+                this.models = arr.length ? arr.map(m => ({ ...m, enabled: m.enabled !== false, _show: false }))
+                    : [{ provider: '', enabled: true, endpoint: '', api_key: '', deployment_name: '', temperature: null, omit_max_tokens: false, _show: false }];
             } catch (e) { console.error('Failed to load models', e); }
             this.loading = false;
         },

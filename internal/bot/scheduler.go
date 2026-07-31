@@ -84,7 +84,8 @@ func scheduledTaskBackoff(attempt int) time.Duration {
 	}
 }
 
-// buildAllTasks returns every enabled scheduled task: AI, RSS, message cleanup, DB cleanup.
+// buildAllTasks returns every enabled scheduled task: AI, RSS, website watch,
+// message cleanup, DB cleanup.
 func (b *Bot) buildAllTasks() map[string]scheduledTaskDef {
 	tasks := make(map[string]scheduledTaskDef)
 
@@ -113,6 +114,35 @@ func (b *Bot) buildAllTasks() map[string]scheduledTaskDef {
 				Task: func() { b.processRssFeed(feedCopy) },
 			}
 		}
+		// ── Watched websites ──
+		// interval_hours wins over a daily time; a site with neither is skipped.
+		for _, site := range b.config.AI.WebsiteWatch.Sites {
+			if !site.Enabled {
+				continue
+			}
+			siteCopy := site
+			name := websiteWatchTaskName(siteCopy.URL)
+			switch {
+			case siteCopy.URL == "":
+				log.Printf("🌐 WebsiteWatch: site %q is enabled but has no url, not scheduled", siteCopy.Name)
+			case siteCopy.IntervalHours > 0:
+				tasks[name] = scheduledTaskDef{
+					Kind:     taskInterval,
+					Interval: time.Duration(siteCopy.IntervalHours) * time.Hour,
+					Task:     func() { b.processWatchedSite(siteCopy) },
+				}
+			case siteCopy.Time != "":
+				tasks[name] = scheduledTaskDef{
+					Kind: taskDaily, TimeStr: siteCopy.Time,
+					Task: func() { b.processWatchedSite(siteCopy) },
+				}
+			default:
+				log.Printf("🌐 WebsiteWatch: site %q (%s) has no schedule (set interval_hours or time), not scheduled",
+					siteCopy.Name, siteCopy.URL)
+			}
+		}
+	} else if len(b.config.AI.WebsiteWatch.Sites) > 0 || len(b.config.AI.Rss.Feeds) > 0 {
+		log.Printf("⏰ ai.enabled is false: RSS feeds and watched websites are not scheduled")
 	}
 
 	// ── AI user profiles (daily behavior-profile update) ──
@@ -141,6 +171,15 @@ func (b *Bot) buildAllTasks() map[string]scheduledTaskDef {
 			Kind:     taskInterval,
 			Interval: time.Duration(b.config.DatabaseCleanup.CleanupIntervalHours) * time.Hour,
 			Task:     b.performDatabaseCleanup,
+		}
+	}
+
+	// ── Database backup ──
+	if b.config.Backup.Enabled && b.config.Backup.IntervalHours > 0 {
+		tasks["database_backup"] = scheduledTaskDef{
+			Kind:     taskInterval,
+			Interval: time.Duration(b.config.Backup.IntervalHours) * time.Hour,
+			Task:     b.performDatabaseBackup,
 		}
 	}
 

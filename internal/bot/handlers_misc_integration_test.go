@@ -61,6 +61,13 @@ func TestHandleDeleteUserMessagesAction_All(t *testing.T) {
 
 	// Both messages deleted via the port.
 	assert.GreaterOrEqual(t, len(tg.DeletedIDs), 2)
+	actions, err := b.db.GetRecentActions(10)
+	require.NoError(t, err)
+	require.Len(t, actions, 2)
+	for _, action := range actions {
+		assert.Equal(t, int64(1), action.AdminID)
+		assert.Equal(t, "@admin (Admin)", action.AdminName)
+	}
 }
 
 func TestDeleteUserMessagesSince(t *testing.T) {
@@ -68,9 +75,14 @@ func TestDeleteUserMessagesSince(t *testing.T) {
 	require.NoError(t, b.db.StoreMessageInfo(&database.MessageInfo{
 		MessageID: 10, ChatID: -100, UserID: 7, Username: "u", Text: "x", Timestamp: time.Now(),
 	}))
-	n := b.deleteUserMessagesSince(7, -100, time.Time{})
+	n := b.deleteUserMessagesSince(7, -100, time.Time{}, 99, "Moderator")
 	assert.Equal(t, 1, n)
 	require.Len(t, tg.DeletedIDs, 1)
+	actions, err := b.db.GetRecentActions(1)
+	require.NoError(t, err)
+	require.Len(t, actions, 1)
+	assert.Equal(t, int64(99), actions[0].AdminID)
+	assert.Equal(t, "Moderator", actions[0].AdminName)
 }
 
 // --- cruel_mute ---------------------------------------------------------------

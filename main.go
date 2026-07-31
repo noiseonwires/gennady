@@ -343,8 +343,8 @@ func runBot(configFile string) int {
 			telegramBot.SetWebOTPGenerator(func() string {
 				return webServer.Auth().GenerateOTP()
 			})
-			telegramBot.SetModeratorLoginGenerator(func(userID int64) (string, string) {
-				return webServer.Auth().CreateModeratorLogin(userID)
+			telegramBot.SetModeratorLoginGenerator(func(userID int64, userName string) (string, string) {
+				return webServer.Auth().CreateModeratorLogin(userID, userName)
 			})
 			webServer.SetSendOTP(func(code string) error {
 				return telegramBot.SendOTPToSuperAdmin(code)

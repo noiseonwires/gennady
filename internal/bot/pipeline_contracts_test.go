@@ -25,7 +25,7 @@ func TestModerationStages_Order(t *testing.T) {
 		names = append(names, s.name)
 	}
 	assert.Equal(t, []string{
-		"dump", "cruel_mute", "prepare_deletion", "enhance", "moderate", "features", "finalize_deletion",
+		"dump", "cruel_mute", "night_mode", "prepare_deletion", "enhance", "moderate", "features", "finalize_deletion",
 	}, names)
 }
 

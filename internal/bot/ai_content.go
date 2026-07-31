@@ -105,10 +105,11 @@ func (b *Bot) generateCreativeReplyWithQuote(messageText string, quotedText stri
 	}
 
 	replacements := map[string]string{
-		"message":      messageText,
-		"context":      context,
-		"quote":        quotedText,
-		"user_profile": b.getUserProfileForModeration(userID, chatID),
+		"message":         messageText,
+		"context":         context,
+		"quote":           quotedText,
+		"user_profile":    b.getUserProfileForModeration(userID, chatID),
+		"user_reputation": b.getUserReputationForModeration(userID),
 	}
 
 	systemPrompt := applyReplacements(b.config.AI.CreativeReplies.Prompt.System, replacements)

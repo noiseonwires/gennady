@@ -60,6 +60,23 @@ func TestBuildAllTasks(t *testing.T) {
 	assert.True(t, tasks["daily_summary"].SeedOnFirstRun)
 }
 
+func TestBuildAllTasks_DatabaseBackup(t *testing.T) {
+	b, _ := newMockBot(t)
+	// Disabled by default.
+	assert.NotContains(t, b.buildAllTasks(), "database_backup")
+
+	b.config.Backup.Enabled = true
+	b.config.Backup.IntervalHours = 48
+	tasks := b.buildAllTasks()
+	require.Contains(t, tasks, "database_backup")
+	assert.Equal(t, taskInterval, tasks["database_backup"].Kind)
+	assert.Equal(t, 48*time.Hour, tasks["database_backup"].Interval)
+
+	// Enabled but with a zero interval stays unregistered.
+	b.config.Backup.IntervalHours = 0
+	assert.NotContains(t, b.buildAllTasks(), "database_backup")
+}
+
 func TestBuildAllTasks_AIDisabled(t *testing.T) {
 	b, _ := newMockBot(t)
 	b.config.AI.Enabled = false

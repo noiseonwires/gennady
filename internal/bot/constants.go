@@ -15,6 +15,16 @@ const (
 	CruelMuteLogPreviewLen = 500
 )
 
+// DefaultNightModeReplyDeleteSeconds is the fallback lifetime (in seconds) of
+// the night-mode reply notice when night_mode.reply_delete_seconds is unset or
+// non-positive.
+const DefaultNightModeReplyDeleteSeconds = 5
+
+// TelegramServiceUserID is Telegram's own service account (login codes, service
+// notifications, and the sender of channel-post forwards into linked discussion
+// groups). Its messages are never user chatter, so night mode leaves them alone.
+const TelegramServiceUserID = 777000
+
 // Mute durations.
 //
 // ForeverMuteDuration is the wall-clock duration we store on a "forever" mute

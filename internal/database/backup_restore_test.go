@@ -132,6 +132,9 @@ func seedAllBackedUpTables(t *testing.T, db *DB) {
 
 	require.NoError(t, db.RecordTokenUsage("gpt-4o", "moderation", "2026-06-09", 1200, 340))
 	require.NoError(t, db.RecordTokenUsage("gpt-4o-mini", "summary", "2026-06-09", 800, 120))
+
+	require.NoError(t, db.SaveWebsiteSnapshot("https://example.com/rules", "rule one", "hash-1"))
+	require.NoError(t, db.SaveWebsiteSnapshot("https://example.com/prices", "price list", "hash-2"))
 }
 
 // backedUpTables lists the tables a backup is expected to carry, paired with
@@ -153,6 +156,7 @@ var backedUpTables = []struct {
 	{"user_daily_activity", nil},
 	{"token_usage", nil},
 	{"forum_topics", []string{"updated_at"}}, // updated_at is write-time bookkeeping
+	{"website_snapshots", []string{"changed_at", "checked_at"}}, // write-time bookkeeping
 }
 
 // TestBackupRestore_IntoEmptyDB_LosesNoData is the headline guarantee: a full

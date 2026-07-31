@@ -2,6 +2,26 @@
 
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [1.2.0] - 2026-07-31
+
+### Added
+
+- **Website watch** for AI-generated change reports from pages without RSS feeds.
+- **Night mode** with scheduled message cleanup, notices and optional auto-mute.
+- **Server time and timezone** on the Diagnostics page.
+- **Scheduled database backups** to local storage, WebDAV or bunny.net, plus
+  manual backups from the Web UI.
+- **Per-model `enabled` flag** for temporarily disabling AI models.
+- **User profile and reputation placeholders** for creative-reply prompts.
+- **Message reporting by `t.me` link** within the same chat.
+
+### Fixed
+
+- Moderation audit events now record the actual moderator.
+- Duplicate Telegram deliveries no longer generate multiple creative replies.
+
 ## [1.1.0] - 2026-07-01
 
 ### Added
@@ -34,4 +54,5 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Bot mentions/replies aimed at the bot's own messages now get a creative reply
   instead of the moderation path; caption mentions are detected.
 
+[1.2.0]: https://github.com/noiseonwires/gennady/releases/tag/v1.2.0
 [1.1.0]: https://github.com/noiseonwires/gennady/releases/tag/v1.1.0

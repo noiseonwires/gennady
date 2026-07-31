@@ -3,6 +3,8 @@
 package bot
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"gennadium/internal/config"
@@ -128,6 +130,43 @@ func TestHandleCommand_HelpInPrivate(t *testing.T) {
 func TestDescribeUpdateType_Handler(t *testing.T) {
 	assert.Equal(t, "message", describeUpdateType(tgbotapi.Update{Message: &tgbotapi.Message{}}))
 	assert.Equal(t, "callback_query", describeUpdateType(tgbotapi.Update{CallbackQuery: &tgbotapi.CallbackQuery{}}))
+}
+
+func TestProcessUpdate_DuplicateMessageHandledOnce(t *testing.T) {
+	b, tg := newMockBot(t)
+	update := telegram.Update{
+		UpdateID: 123,
+		Message: &telegram.Message{
+			MessageID: 1,
+			Chat:      telegram.Chat{ID: 42, Type: "private"},
+			From:      &telegram.User{ID: 42},
+			Text:      "hello",
+		},
+	}
+
+	b.processUpdate(update)
+	b.processUpdate(update)
+
+	assert.Len(t, tg.SentMessages, 1)
+}
+
+func TestMarkUpdateHandled_ConcurrentClaim(t *testing.T) {
+	b, _ := newMockBot(t)
+	var firstClaims atomic.Int32
+	var wg sync.WaitGroup
+
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if !b.markUpdateHandled(456) {
+				firstClaims.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), firstClaims.Load())
 }
 
 func TestShouldAddToDeleteQueue(t *testing.T) {

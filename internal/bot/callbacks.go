@@ -779,7 +779,7 @@ func (b *Bot) handleAdminModWebUI(query *tgbotapi.CallbackQuery) {
 		modPrefix = "/mod"
 	}
 
-	token, otp := b.generateModeratorLogin(query.From.ID)
+	token, otp := b.generateModeratorLogin(query.From.ID, getUserDisplayNameFromUser(query.From))
 	link := publicURL + modPrefix + "/#t=" + token
 
 	// Deliver the link and the OTP as two separate Telegram messages, always to

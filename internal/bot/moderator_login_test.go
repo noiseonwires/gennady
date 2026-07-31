@@ -31,7 +31,7 @@ func TestModeratorWebLoginAvailable(t *testing.T) {
 	// No login generator wired → unavailable.
 	assert.False(t, b.moderatorWebLoginAvailable())
 
-	b.generateModeratorLogin = func(int64) (string, string) { return "tok", "otp" }
+	b.generateModeratorLogin = func(int64, string) (string, string) { return "tok", "otp" }
 	// Generator present but no resolvable public URL → unavailable.
 	assert.False(t, b.moderatorWebLoginAvailable())
 

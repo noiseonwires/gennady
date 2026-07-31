@@ -9,6 +9,7 @@ function diagnosticsPage() {
         promptWarnings: [],
         events: [],
         serverTimezone: '',
+        serverTime: '',
         telegram: {},
         bunnyEnv: {},
         chats: [],
@@ -81,6 +82,7 @@ function diagnosticsPage() {
                 this.promptWarnings = d.prompt_warnings || [];
                 this.events = d.scheduled_events || [];
                 this.serverTimezone = d.server_timezone || '';
+                this.serverTime = d.server_time || '';
                 this.telegram = d.telegram || {};
                 this.bunnyEnv = d.bunny_env || {};
                 this.chats = d.chats || [];

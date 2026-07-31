@@ -68,7 +68,8 @@ function configSection(sectionId) {
         isTextarea(f) {
             return f.type === 'string' && !f.sensitive &&
                 (f.key.includes('prompt.') || f.key.includes('chat_rules') ||
-                 f.key.includes('warning_mute') || f.key.includes('new_user_rules'));
+                 f.key.includes('warning_mute') || f.key.includes('new_user_rules') ||
+                 f.key === 'night_mode.message' || f.key === 'night_mode.muted_message');
         },
 
         insertPh(ev, key, name) {

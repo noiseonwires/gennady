@@ -342,8 +342,33 @@ func TestAIModelConfigsGetCount(t *testing.T) {
 	assert.Equal(t, "a", a.Get(2).DeploymentName)
 
 	empty := AIModelConfigs{}
-	assert.Equal(t, AIModelConfig{}, empty.Get(0))
+	assert.False(t, empty.Get(0).IsEnabled())
 	assert.Equal(t, 0, empty.Count())
+}
+
+func TestAIModelConfigsSkipDisabled(t *testing.T) {
+	enabled, disabled := true, false
+
+	// A missing flag means enabled (configs written before the field existed).
+	assert.True(t, AIModelConfig{}.IsEnabled())
+	assert.True(t, AIModelConfig{Enabled: &enabled}.IsEnabled())
+	assert.False(t, AIModelConfig{Enabled: &disabled}.IsEnabled())
+
+	a := AIModelConfigs{Configs: []AIModelConfig{
+		{DeploymentName: "off", Enabled: &disabled},
+		{DeploymentName: "on", Enabled: &enabled},
+		{DeploymentName: "implicit"},
+	}}
+	assert.Equal(t, 2, a.Count())
+	assert.Equal(t, "on", a.Get(0).DeploymentName)
+	assert.Equal(t, "implicit", a.Get(1).DeploymentName)
+	assert.Equal(t, "on", a.Get(2).DeploymentName)
+
+	// Every entry disabled: Get returns a placeholder that reports as disabled
+	// so callers refuse to issue a request.
+	allOff := AIModelConfigs{Configs: []AIModelConfig{{DeploymentName: "x", Enabled: &disabled}}}
+	assert.Equal(t, 0, allOff.Count())
+	assert.False(t, allOff.Get(0).IsEnabled())
 }
 
 // --- config_db.go round-trip --------------------------------------------------

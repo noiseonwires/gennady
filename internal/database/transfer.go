@@ -30,6 +30,7 @@ var transferTableNames = []string{
 	"token_usage",
 	"forum_topics",
 	"moderation_stats",
+	"website_snapshots",
 }
 
 // transferExcludedTables lists tables that are intentionally NOT copied during
@@ -106,7 +107,7 @@ func tableImportStrategy(table string) importStrategy {
 	case "moderation_stats":
 		return importMergeModerationStats
 	default:
-		return importReplace // config_values, muted_users
+		return importReplace // config_values, muted_users, website_snapshots
 	}
 }
 

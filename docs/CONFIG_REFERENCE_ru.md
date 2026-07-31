@@ -63,6 +63,21 @@
 | `message_deletion.chat_deletion_retention_hours` | `MESSAGE_DELETION_CHAT_DELETION_RETENTION_HOURS` | int | Часы хранения - Удалять сообщения старше этого количества часов (по умолч.: 3) |
 | `message_deletion.cleanup_interval_hours` | `MESSAGE_DELETION_CLEANUP_INTERVAL_HOURS` | int | Интервал очистки (часы) - Как часто запускать очистку удаления (по умолч.: 3) |
 
+## Ночной режим
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `night_mode.enabled` | `NIGHT_MODE_ENABLED` | bool | Включено - Включить запланированный «тихий час»: удалять каждое новое сообщение сразу при получении (без анализа и сохранения) и отвечать уведомлением, которое само удаляется. Сообщения от админов и супер-админа не затрагиваются. |
+| `night_mode.start_time` | `NIGHT_MODE_START_TIME` | string | Время начала - Начало окна в 24-часовом формате ЧЧ:ММ (например, 23:00) |
+| `night_mode.end_time` | `NIGHT_MODE_END_TIME` | string | Время окончания - Конец окна в формате ЧЧ:ММ; раньше времени начала = окно через полночь (например, 08:00) |
+| `night_mode.days` | `NIGHT_MODE_DAYS` | []string | Дни - Дни недели, в которые может НАЧИНАТЬСЯ тихий час (monday/mon ...); пусто = каждый день. Окно через полночь относится ко дню, в который оно начинается. |
+| `night_mode.message` | `NIGHT_MODE_MESSAGE` | string | Текст ответа - Уведомление в ответ на каждое удалённое сообщение; оставьте пустым для встроенной фразы |
+| `night_mode.muted_message` | `NIGHT_MODE_MUTED_MESSAGE` | string | Текст ответа при муте - Уведомление для пользователя, которому выдан мут за флуд в ночном режиме; оставьте пустым для встроенной фразы |
+| `night_mode.reply_delete_seconds` | `NIGHT_MODE_REPLY_DELETE_SECONDS` | int | Секунды до удаления ответа - Сколько секунд уведомление остаётся до удаления (по умолч.: 5) |
+| `night_mode.mute_after_messages` | `NIGHT_MODE_MUTE_AFTER_MESSAGES` | int | Мут после N сообщений - Выдать пользователю мут до конца окна, если он отправит больше указанного числа сообщений в ночном режиме (0 = выкл.) |
+| `night_mode.included_topics` | `NIGHT_MODE_INCLUDED_TOPICS` | []chat_topic | Включённые темы - Пары (чат, тема), где действует ночной режим. Пусто = каждый чат модерации / любая тема. |
+| `night_mode.excluded_topics` | `NIGHT_MODE_EXCLUDED_TOPICS` | []chat_topic | Исключённые темы - Пары (чат, тема), переопределяющие «Включённые темы» - ночной режим их не затрагивает. |
+
 ## Очистка базы данных
 
 | Ключ YAML | ENV | Тип | Описание |
@@ -72,6 +87,36 @@
 | `database_cleanup.warning_retention_hours` | `DATABASE_CLEANUP_WARNING_RETENTION_HOURS` | int | Хранение предупреждений (часы) - Хранить записи предупреждений столько часов (по умолч.: 168) |
 | `database_cleanup.action_retention_hours` | `DATABASE_CLEANUP_ACTION_RETENTION_HOURS` | int | Хранение действий (часы) - Хранить записи действий столько часов (по умолч.: 168) |
 | `database_cleanup.preserve_warned_muted_messages` | `DATABASE_CLEANUP_PRESERVE_WARNED_MUTED_MESSAGES` | bool | Сохранять сообщения с предупреждением или мутом - Не удалять сообщения, из-за которых было выдано предупреждение или активный мут, пока мут не снят и не истёк (по умолчанию: выкл.) |
+
+## Резервное копирование БД
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `backup.enabled` | `BACKUP_ENABLED` | bool | Включено - Периодически копировать базу данных в резервное хранилище, заменяя предыдущую копию (по умолч.: выкл.) |
+| `backup.interval_hours` | `BACKUP_INTERVAL_HOURS` | int | Интервал (часы) - Как часто выполнять резервное копирование, в часах (по умолч.: 48) |
+| `backup.file_prefix` | `BACKUP_FILE_PREFIX` | string | Префикс имени файла - Добавляется в начало имени файла резервной копии, чтобы несколько экземпляров бота могли использовать одно хранилище (например, 'chat1_' даёт chat1_moderation.db). Сохраняются только символы A-Z a-z 0-9 . _ - |
+| `backup.include_config` | `BACKUP_INCLUDE_CONFIG` | bool | Включать конфигурацию - Включать таблицу config_values (содержит секреты, если конфигурация хранится в БД) в резервную копию |
+| `backup.notify_super_admin_on_failure` | `BACKUP_NOTIFY_SUPER_ADMIN_ON_FAILURE` | bool | Уведомлять суперадмина об ошибке - Отправлять суперадмину ЛС с деталями ошибки, если запланированное резервное копирование не удалось. Требует admin.super_admin_user_id (по умолч.: выкл.) |
+| `backup.temp_dir` | `BACKUP_TEMP_DIR` | string | Временный каталог - Рабочая папка для промежуточного снимка, который удаляется сразу после загрузки. По умолчанию - каталог локального файла БД, а если он недоступен для записи (часто в контейнерах) - системный временный каталог |
+| `backup.target` | `BACKUP_TARGET` | string | Назначение - Куда копировать резервную копию: local, webdav или bunny (по умолч.: local) |
+| `backup.local_path` | `BACKUP_LOCAL_PATH` | string | Локальная папка - Папка назначения для варианта 'local' (по умолч.: ./backups) |
+
+## Резервное копирование - WebDAV
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `backup.webdav.url` | `BACKUP_WEBDAV_URL` | string | URL WebDAV - Полный URL коллекции, например https://cloud.example.com/remote.php/dav/files/user/backups |
+| `backup.webdav.username` | `BACKUP_WEBDAV_USERNAME` | string | Имя пользователя WebDAV - Имя пользователя для basic-аутентификации WebDAV |
+| `backup.webdav.password` | `BACKUP_WEBDAV_PASSWORD` | string 🔒 | Пароль WebDAV - Пароль или токен приложения для basic-аутентификации WebDAV |
+
+## Резервное копирование - Bunny Storage
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `backup.bunny.endpoint` | `BACKUP_BUNNY_ENDPOINT` | string | Адрес хранилища - Хост основного региона вашей storage-зоны: storage.bunnycdn.com (Франкфурт, по умолчанию), uk/ny/la/sg/se/br/jh/syd.storage.bunnycdn.com. Указан на странице Access зоны |
+| `backup.bunny.storage_zone` | `BACKUP_BUNNY_STORAGE_ZONE` | string | Storage Zone - Имя storage-зоны bunny.net |
+| `backup.bunny.access_key` | `BACKUP_BUNNY_ACCESS_KEY` | string 🔒 | Access Key - Пароль storage-зоны со вкладки «FTP & API Access» - НЕ API-ключ аккаунта |
+| `backup.bunny.path` | `BACKUP_BUNNY_PATH` | string | Папка - Необязательная папка внутри зоны, например gennady/backups (создаётся автоматически) |
 
 ## Запланированные события
 
@@ -187,8 +232,8 @@
 | `ai.creative_replies.reply_chain_depth` | `AI_CREATIVE_REPLIES_REPLY_CHAIN_DEPTH` | int | Глубина цепочки ответов - Макс. сообщений из цепочки ответов для контекста истории диалога (по умолч.: 5) |
 | `ai.creative_replies.reply_chain_max_age_hours` | `AI_CREATIVE_REPLIES_REPLY_CHAIN_MAX_AGE_HOURS` | int | Макс. возраст цепочки (часы) - Прекращать обход цепочки ответов при попадании на сообщение старше указанного числа часов (по умолч.: 6) |
 | `ai.creative_replies.reply_chain_adjacent_window` | `AI_CREATIVE_REPLIES_REPLY_CHAIN_ADJACENT_WINDOW` | int | Окно соседних сообщений - Добавлять в контекст другие сообщения участников цепочки, чьи ID сообщений попадают в это количество слотов вокруг сообщений цепочки (0 - отключено). Возраст ограничен параметром reply_chain_max_age_hours. |
-| `ai.creative_replies.prompt.system` | `AI_CREATIVE_REPLIES_PROMPT_SYSTEM` | string | Креативный ответ (системный) - Системный промпт для генерации креативного ответа (плейсхолдеры: `{{message}}`, `{{context}}`, `{{quote}}`) |
-| `ai.creative_replies.prompt.user` | `AI_CREATIVE_REPLIES_PROMPT_USER` | string | Креативный ответ (пользовательский) - Пользовательский промпт для генерации креативного ответа (плейсхолдеры: `{{message}}`, `{{context}}`, `{{quote}}`) |
+| `ai.creative_replies.prompt.system` | `AI_CREATIVE_REPLIES_PROMPT_SYSTEM` | string | Креативный ответ (системный) - Системный промпт для генерации креативного ответа (плейсхолдеры: `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}`) |
+| `ai.creative_replies.prompt.user` | `AI_CREATIVE_REPLIES_PROMPT_USER` | string | Креативный ответ (пользовательский) - Пользовательский промпт для генерации креативного ответа (плейсхолдеры: `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}`) |
 
 ## ИИ - утреннее приветствие
 
@@ -272,6 +317,18 @@
 | `ai.rss.translation_prompt.user` | `AI_RSS_TRANSLATION_PROMPT_USER` | string | Перевод RSS (пользовательский) - Пользовательский промпт для перевода RSS-лент (при отсутствии используется общий перевод) (плейсхолдеры: `{{text}}`) |
 | `ai.rss.summary_prompt.system` | `AI_RSS_SUMMARY_PROMPT_SYSTEM` | string | Сводка RSS (системный) - Системный промпт для подготовки сводки RSS-лент (плейсхолдеры: `{{text}}`) |
 | `ai.rss.summary_prompt.user` | `AI_RSS_SUMMARY_PROMPT_USER` | string | Сводка RSS (пользовательский) - Пользовательский промпт для подготовки сводки RSS-лент (плейсхолдеры: `{{text}}`) |
+
+## Отслеживание сайтов
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `ai.website_watch.use_full_model` | `AI_WEBSITE_WATCH_USE_FULL_MODEL` | bool | Использовать полную модель - Использовать полную модель вместо лёгкой для анализа изменений страницы |
+| `ai.website_watch.light_model_threshold` | `AI_WEBSITE_WATCH_LIGHT_MODEL_THRESHOLD` | int | Порог лёгкой модели - Принудительно использовать лёгкую модель, когда diff превышает это количество символов (0 = отключено) |
+| `ai.website_watch.max_content_length` | `AI_WEBSITE_WATCH_MAX_CONTENT_LENGTH` | int | Максимальная длина содержимого - Сколько извлечённого текста страницы сохраняется и сравнивается, в символах (по умолчанию 8192) |
+| `ai.website_watch.max_diff_length` | `AI_WEBSITE_WATCH_MAX_DIFF_LENGTH` | int | Максимальная длина diff - Сколько символов diff передаётся модели (по умолчанию 4096) |
+| `ai.website_watch.no_changes_marker` | `AI_WEBSITE_WATCH_NO_CHANGES_MARKER` | string | Маркер «без изменений» - Точный ответ, который модель должна вернуть, если изменение не стоит публикации; в этом случае ничего не отправляется (по умолчанию NO_CHANGES) |
+| `ai.website_watch.prompt.system` | `AI_WEBSITE_WATCH_PROMPT_SYSTEM` | string | Изменения сайта (системный) - Системный промпт для описания изменений на отслеживаемой странице (плейсхолдеры: `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}`) |
+| `ai.website_watch.prompt.user` | `AI_WEBSITE_WATCH_PROMPT_USER` | string | Изменения сайта (пользовательский) - Пользовательский промпт для описания изменений на отслеживаемой странице (плейсхолдеры: `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}`) |
 
 ## ИИ - профили пользователей
 

@@ -36,14 +36,19 @@ type webModContext struct {
 
 // newWebModContext validates the target and resolves usernames once.
 // messageID may be 0 when the action is not tied to a specific message.
-func (b *Bot) newWebModContext(userID, chatID int64, messageID int) (*webModContext, error) {
+func (b *Bot) newWebModContext(userID, chatID int64, messageID int, adminID int64, adminName string) (*webModContext, error) {
 	if !b.config.IsModerationChat(chatID) {
 		return nil, fmt.Errorf("chat %d is not a moderation chat", chatID)
 	}
 	if userID == 0 {
 		return nil, fmt.Errorf("user_id is required")
 	}
-	adminID := b.config.Admin.SuperAdminUserID
+	if adminID == 0 {
+		adminID = b.config.Admin.SuperAdminUserID
+	}
+	if adminName == "" {
+		adminName = b.getUserDisplayName(adminID)
+	}
 
 	username := ""
 	if messageID > 0 {
@@ -61,7 +66,7 @@ func (b *Bot) newWebModContext(userID, chatID int64, messageID int) (*webModCont
 		messageID: messageID,
 		username:  username,
 		adminID:   adminID,
-		adminName: b.getUserDisplayName(adminID),
+		adminName: adminName,
 	}, nil
 }
 
@@ -121,8 +126,8 @@ func muteDeadline(durationMinutes int, isCruel bool) (time.Time, string) {
 // applyMute is the shared implementation behind WebMuteUser and
 // WebCruelMuteUser: it records the mute, optionally restricts via Telegram,
 // logs the action and sends an admin-chat notification.
-func (b *Bot) applyMute(userID, chatID int64, messageID, durationMinutes int, isCruel bool) error {
-	ctx, err := b.newWebModContext(userID, chatID, messageID)
+func (b *Bot) applyMute(userID, chatID int64, messageID, durationMinutes int, isCruel bool, adminID int64, adminName string) error {
+	ctx, err := b.newWebModContext(userID, chatID, messageID, adminID, adminName)
 	if err != nil {
 		return err
 	}
@@ -168,35 +173,41 @@ func (b *Bot) applyMute(userID, chatID int64, messageID, durationMinutes int, is
 
 // WebMuteUser mutes a user from the WebUI. durationMinutes==0 means forever.
 // messageID may be 0 when not tied to a specific message.
-func (b *Bot) WebMuteUser(userID, chatID int64, messageID, durationMinutes int) error {
-	return b.applyMute(userID, chatID, messageID, durationMinutes, false)
+func (b *Bot) WebMuteUser(userID, chatID int64, messageID, durationMinutes int, adminID int64, adminName string) error {
+	return b.applyMute(userID, chatID, messageID, durationMinutes, false, adminID, adminName)
 }
 
 // WebCruelMuteUser cruel-mutes a user from the WebUI. durationMinutes==0 means
 // forever. messageID may be 0 when not tied to a specific message.
-func (b *Bot) WebCruelMuteUser(userID, chatID int64, messageID, durationMinutes int) error {
-	return b.applyMute(userID, chatID, messageID, durationMinutes, true)
+func (b *Bot) WebCruelMuteUser(userID, chatID int64, messageID, durationMinutes int, adminID int64, adminName string) error {
+	return b.applyMute(userID, chatID, messageID, durationMinutes, true, adminID, adminName)
 }
 
 // WebDeleteUserMessages deletes a user's recent messages from the WebUI. period
 // is one of "1h", "1d" or "all". It returns the number of messages deleted.
-func (b *Bot) WebDeleteUserMessages(userID, chatID int64, period string) (int, error) {
+func (b *Bot) WebDeleteUserMessages(userID, chatID int64, period string, adminID int64, adminName string) (int, error) {
 	since, ok := purgePeriodSince(period)
 	if !ok {
 		return 0, fmt.Errorf("invalid period %q", period)
 	}
-	return b.deleteUserMessagesSince(userID, chatID, since), nil
+	if adminID == 0 {
+		adminID = b.config.Admin.SuperAdminUserID
+	}
+	if adminName == "" {
+		adminName = b.getUserDisplayName(adminID)
+	}
+	return b.deleteUserMessagesSince(userID, chatID, since, adminID, adminName), nil
 }
 
 // WebDeleteMessage deletes a single message from the Telegram chat (and clears
 // any pending-deletion record for it). The local message_info row is left
 // intact so the WebUI message list keeps its history; use the separate
 // "delete from DB" action to remove the record.
-func (b *Bot) WebDeleteMessage(userID, chatID int64, messageID int) error {
+func (b *Bot) WebDeleteMessage(userID, chatID int64, messageID int, adminID int64, adminName string) error {
 	if messageID == 0 {
 		return fmt.Errorf("message_id is required")
 	}
-	ctx, err := b.newWebModContext(userID, chatID, messageID)
+	ctx, err := b.newWebModContext(userID, chatID, messageID, adminID, adminName)
 	if err != nil {
 		return err
 	}
@@ -224,8 +235,8 @@ func (b *Bot) WebDeleteMessage(userID, chatID int64, messageID int) error {
 
 // WebUnmuteUser removes both regular and cruel mute records for the given user
 // in the given chat, and lifts the Telegram restriction.
-func (b *Bot) WebUnmuteUser(userID, chatID int64) error {
-	ctx, err := b.newWebModContext(userID, chatID, 0)
+func (b *Bot) WebUnmuteUser(userID, chatID, adminID int64, adminName string) error {
+	ctx, err := b.newWebModContext(userID, chatID, 0, adminID, adminName)
 	if err != nil {
 		return err
 	}
@@ -253,11 +264,11 @@ func (b *Bot) WebUnmuteUser(userID, chatID int64) error {
 // WebWarnUser issues a warning for a specific message from the WebUI. The
 // warning text is generated by the same AI pipeline as the inline admin
 // keyboard and posted as a reply in the source chat.
-func (b *Bot) WebWarnUser(userID, chatID int64, messageID int) error {
+func (b *Bot) WebWarnUser(userID, chatID int64, messageID int, adminID int64, adminName string) error {
 	if messageID == 0 {
 		return fmt.Errorf("message_id is required")
 	}
-	ctx, err := b.newWebModContext(userID, chatID, messageID)
+	ctx, err := b.newWebModContext(userID, chatID, messageID, adminID, adminName)
 	if err != nil {
 		return err
 	}
@@ -351,11 +362,11 @@ func (b *Bot) WebWarnUser(userID, chatID int64, messageID int) error {
 // enhancement, profile tracking, deletion-queue insertion and message_info
 // storage are all skipped (the message is already recorded). Only the
 // content-moderation analysis and its triggered actions are repeated.
-func (b *Bot) WebRemoderateMessage(userID, chatID int64, messageID int) error {
+func (b *Bot) WebRemoderateMessage(userID, chatID int64, messageID int, adminID int64, adminName string) error {
 	if messageID == 0 {
 		return fmt.Errorf("message_id is required")
 	}
-	ctx, err := b.newWebModContext(userID, chatID, messageID)
+	ctx, err := b.newWebModContext(userID, chatID, messageID, adminID, adminName)
 	if err != nil {
 		return err
 	}
@@ -522,6 +533,9 @@ func (b *Bot) distinctModerationModels() []labeledModerationModel {
 	seen := make(map[string]bool)
 	add := func(group string, cfgs []config.AIModelConfig) {
 		for i, c := range cfgs {
+			if !c.IsEnabled() {
+				continue
+			}
 			if strings.TrimSpace(c.Endpoint) == "" && strings.TrimSpace(c.DeploymentName) == "" {
 				continue
 			}

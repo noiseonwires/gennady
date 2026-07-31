@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -14,7 +15,9 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
+	"gennadium/internal/backup"
 	"gennadium/internal/config"
 	"gennadium/internal/database"
 
@@ -28,7 +31,45 @@ import (
 const (
 	defaultMaxDBUploadBytes int64 = 128 << 20
 	maxDBUploadBytesEnv           = "WEB_UI_MAX_DB_UPLOAD_BYTES"
+
+	// manualBackupTimeout caps a backup triggered from the web UI.
+	manualBackupTimeout = 30 * time.Minute
 )
+
+// handleRunBackup runs one backup cycle on demand with the configured backup
+// settings, so an operator can verify the destination without waiting for the
+// scheduled run. The backup section does not have to be enabled - "enabled"
+// only controls the periodic task - but it must be configured.
+func (h *apiHandler) handleRunBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeWebErr(w, errMethodNotAllowed)
+		return
+	}
+
+	config.RLock()
+	cfg := h.config.Backup
+	dbPath := h.config.Database.Path
+	config.RUnlock()
+
+	ctx, cancel := context.WithTimeout(r.Context(), manualBackupTimeout)
+	defer cancel()
+
+	res, err := backup.Run(ctx, h.db, cfg, dbPath)
+	if err != nil {
+		log.Printf("WebUI: manual database backup failed: %v", err)
+		writeWebErrf(w, errBackupFailed, "%v", err)
+		return
+	}
+
+	log.Printf("WebUI: manual database backup completed: %s (%d bytes) → %s", res.FileName, res.Bytes, res.Destination)
+	jsonResponse(w, map[string]any{
+		"status":      "ok",
+		"file":        res.FileName,
+		"bytes":       res.Bytes,
+		"destination": res.Destination,
+		"message":     fmt.Sprintf("Backup written: %s (%.1f MB) → %s", res.FileName, float64(res.Bytes)/(1024*1024), res.Destination),
+	})
+}
 
 func (h *apiHandler) handleDownloadConfig(w http.ResponseWriter, r *http.Request) {
 	exportCfg, err := config.ConfigForExport(h.config)

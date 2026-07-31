@@ -65,7 +65,7 @@ func fullySpecifiedConfig() *Config {
 	}}
 	cfg.AI.FullModel = AIModelConfigs{Configs: []AIModelConfig{
 		{Endpoint: "https://full.example", APIKey: "full-key", DeploymentName: "gpt-full", Temperature: floatPtr(0.7), OmitMaxTokens: true},
-		{Endpoint: "https://full2.example", APIKey: "full-key-2", DeploymentName: "gpt-full-2"},
+		{Endpoint: "https://full2.example", APIKey: "full-key-2", DeploymentName: "gpt-full-2", Enabled: boolPtr(false)},
 	}}
 	cfg.AI.ContentModeration.Enabled = true
 	cfg.AI.ContentModeration.DefaultMuteMinutes = 30
@@ -82,6 +82,15 @@ func fullySpecifiedConfig() *Config {
 	}
 
 	cfg.UserProfiles.Enabled = true
+
+	cfg.AI.WebsiteWatch.NoChangesMarker = "NO_CHANGES"
+	cfg.AI.WebsiteWatch.Sites = []WatchedSite{
+		{
+			Name: "Rules", URL: "https://example.com/rules", Enabled: true,
+			IntervalHours: 12, MaxMessageLength: 2000,
+			PostTo: ChatTopicList{Refs: []ChatTopicRef{{Chat: -100222, Topic: 5}}},
+		},
+	}
 
 	cfg.Topics = []TopicNameRef{
 		{Chat: -100111, Topic: 7, Name: "Support"},
@@ -148,6 +157,8 @@ func TestConfigDump_PreservesEveryValueCategory(t *testing.T) {
 	assert.Equal(t, "gpt-full", restored.AI.FullModel.Configs[0].DeploymentName)
 	assert.True(t, restored.AI.FullModel.Configs[0].OmitMaxTokens)
 	assert.Equal(t, "full-key-2", restored.AI.FullModel.Configs[1].APIKey)
+	require.NotNil(t, restored.AI.FullModel.Configs[1].Enabled)
+	assert.False(t, *restored.AI.FullModel.Configs[1].Enabled, "per-model enabled flag")
 
 	// Slice of structs: moderation rules (incl. *bool field)
 	require.Len(t, restored.AI.ContentModeration.Rules, 2)
@@ -166,6 +177,13 @@ func TestConfigDump_PreservesEveryValueCategory(t *testing.T) {
 	assert.Equal(t, "News", restored.AI.Rss.Feeds[0].Name)
 	require.Len(t, restored.AI.Rss.Feeds[0].PostTo.Refs, 1)
 	assert.Equal(t, int64(-100111), restored.AI.Rss.Feeds[0].PostTo.Refs[0].Chat)
+
+	// Slice of structs: watched websites (with nested ChatTopicList)
+	require.Len(t, restored.AI.WebsiteWatch.Sites, 1)
+	assert.Equal(t, "Rules", restored.AI.WebsiteWatch.Sites[0].Name)
+	assert.Equal(t, 12, restored.AI.WebsiteWatch.Sites[0].IntervalHours)
+	require.Len(t, restored.AI.WebsiteWatch.Sites[0].PostTo.Refs, 1)
+	assert.Equal(t, 5, restored.AI.WebsiteWatch.Sites[0].PostTo.Refs[0].Topic)
 }
 
 // TestConfigRestore_ThroughLoadFromStringMap verifies the production restore

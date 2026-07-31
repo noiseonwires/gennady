@@ -5,6 +5,7 @@ package bot
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gennadium/internal/config"
@@ -82,6 +83,51 @@ func TestNotifySuperAdminStartup_SkippedWithoutSuperAdmin(t *testing.T) {
 	b.config.Admin.NotifyStartup = true
 
 	b.notifySuperAdminStartup()
+	assert.Empty(t, tg.SentMessages, "no super-admin configured must suppress the notification")
+}
+
+func TestNotifySuperAdminBackupFailed_SendsWhenEnabled(t *testing.T) {
+	b, tg := newMockBot(t)
+	b.config.Admin.SuperAdminUserID = 7
+	b.config.Backup.NotifyOnFailure = true
+	// Deliberately left off: the backup notice must not depend on it.
+	b.config.Admin.NotifyStartup = false
+
+	b.notifySuperAdminBackupFailed(errors.New("upload rejected: 401 Unauthorized"))
+
+	require.Len(t, tg.SentMessages, 1)
+	assert.Equal(t, int64(7), tg.SentMessages[0].ChatID)
+	assert.Contains(t, tg.SentMessages[0].Text, "401 Unauthorized")
+}
+
+func TestNotifySuperAdminBackupFailed_RedactsAndTruncates(t *testing.T) {
+	b, tg := newMockBot(t)
+	b.config.Admin.SuperAdminUserID = 7
+	b.config.Backup.NotifyOnFailure = true
+
+	b.notifySuperAdminBackupFailed(errors.New("PUT failed: password=hunter2 " + strings.Repeat("x", MaxTelegramMessageLength)))
+
+	require.Len(t, tg.SentMessages, 1)
+	text := tg.SentMessages[0].Text
+	assert.NotContains(t, text, "hunter2", "secrets must not be echoed into Telegram")
+	assert.LessOrEqual(t, len([]rune(text)), MaxTelegramMessageLength)
+}
+
+func TestNotifySuperAdminBackupFailed_SkippedWhenDisabled(t *testing.T) {
+	b, tg := newMockBot(t)
+	b.config.Admin.SuperAdminUserID = 7
+	b.config.Backup.NotifyOnFailure = false
+
+	b.notifySuperAdminBackupFailed(errors.New("boom"))
+	assert.Empty(t, tg.SentMessages, "disabled flag must suppress the notification")
+}
+
+func TestNotifySuperAdminBackupFailed_SkippedWithoutSuperAdmin(t *testing.T) {
+	b, tg := newMockBot(t)
+	b.config.Admin.SuperAdminUserID = 0
+	b.config.Backup.NotifyOnFailure = true
+
+	b.notifySuperAdminBackupFailed(errors.New("boom"))
 	assert.Empty(t, tg.SentMessages, "no super-admin configured must suppress the notification")
 }
 

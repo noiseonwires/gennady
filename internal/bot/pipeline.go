@@ -4,6 +4,7 @@ package bot
 
 import (
 	"log"
+	"time"
 	"unicode/utf8"
 
 	"gennadium/internal/i18n"
@@ -39,7 +40,7 @@ type feature struct {
 // moderationStages returns the ordered ingest pipeline applied to every message
 // in a moderation chat. The order is significant:
 //
-//	dump → cruel-mute → prepare-deletion → enhance → moderate
+//	dump → cruel-mute → night-mode → prepare-deletion → enhance → moderate
 //	     → features → finalize-deletion
 //
 // Recording/moderation (enhance + moderate) runs synchronously before the
@@ -51,6 +52,7 @@ func (b *Bot) moderationStages() []stage {
 		b.stagesCache = []stage{
 			{"dump", b.stageDumpModeration},
 			{"cruel_mute", b.stageCruelMute},
+			{"night_mode", b.stageNightMode},
 			{"prepare_deletion", b.stagePrepareDeletion},
 			{"enhance", b.stageEnhance},
 			{"moderate", b.stageModerate},
@@ -89,6 +91,40 @@ func (b *Bot) stageCruelMute(mc *MsgContext) Direction {
 		return Stop
 	}
 	return Continue
+}
+
+// stageNightMode enforces the configured "quiet hours": while the night-mode
+// window is active for this (chat, topic), every new message is deleted on
+// arrival - without being recorded or analyzed - and the bot posts a short
+// notice that self-deletes after night_mode.reply_delete_seconds. A user who
+// keeps posting past night_mode.mute_after_messages is muted until the window
+// ends. Edits, service messages, the Telegram service account and messages from
+// admins (including the super-admin) are exempt, and the pipeline stops so no
+// later stage records or moderates the message.
+func (b *Bot) stageNightMode(mc *MsgContext) Direction {
+	if mc.IsEdited || mc.Scope.IsService {
+		return Continue
+	}
+	now := time.Now()
+	if !b.config.IsNightModeActive(mc.Msg.Chat.ID, mc.Scope.Topic, now) {
+		return Continue
+	}
+	if mc.Msg.From != nil {
+		// The Telegram service account (channel-post forwards, service
+		// notifications) is never user chatter - leave it alone.
+		if mc.Msg.From.ID == TelegramServiceUserID {
+			return Continue
+		}
+		// Admins and the super-admin may always speak. The admin lookup can hit
+		// the Telegram API, so it is deliberately done only after confirming the
+		// window is active (night-mode traffic is low by design).
+		if b.isUserAdmin(mc.Msg.From.ID) {
+			return Continue
+		}
+	}
+	muted := b.registerNightModeMessage(mc.Msg, now)
+	b.handleNightModeMessage(mc.Msg, muted)
+	return Stop
 }
 
 // stagePrepareDeletion pre-computes the message-deletion-queue flags so the

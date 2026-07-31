@@ -46,6 +46,7 @@ function systemPage() {
         uploading: false,
         uploadingLabel: '',
         cloning: false,
+        backingUp: false,
         loading: false,
 
         async load() {
@@ -174,6 +175,23 @@ function systemPage() {
                 alert(Alpine.store('i18n').t('sys_clone_fail') + ' ' + (e.message || e));
             } finally {
                 this.cloning = false;
+            }
+        },
+
+        // runBackup triggers one immediate run of the configured database backup
+        // (settings live in the "Database Backup" config section).
+        async runBackup() {
+            if (!confirm(Alpine.store('i18n').t('sys_backup_confirm'))) return;
+            this.backingUp = true;
+            try {
+                const r = await api('/api/files/db/backup-now', { method: 'POST' });
+                const d = await r.json();
+                if (r.ok) alert(d.message || Alpine.store('i18n').t('sys_backup_ok'));
+                else alert(Alpine.store('i18n').err(d) || Alpine.store('i18n').t('sys_backup_fail'));
+            } catch (e) {
+                alert(Alpine.store('i18n').t('sys_backup_fail') + ' ' + (e.message || e));
+            } finally {
+                this.backingUp = false;
             }
         }
     };

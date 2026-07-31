@@ -132,6 +132,10 @@
   "cmute.confirm_dialog": "⚠️ Are you sure you want to cruel-mute %s %s?\n\nThe user will not be officially restricted, but every message they send will be auto-deleted.",
   "cmute.offer_after_failure": "⚠️ Failed to mute %s normally:\n%s\n\nYou can apply a *cruel mute* instead — the user will not be officially restricted, but every message they send will be auto-deleted.",
 
+  "night_mode.default_message": "🌙 Night mode is on, please keep silence. Looking forward to seeing you in the morning!",
+  "night_mode.muted_message": "🌙 Night mode is on. You have been muted until the morning for continuing to post. See you then!",
+  "night_mode.mute_reason": "Kept posting during night mode",
+
   "delmsg.prompt": "🗑️ Delete this user's messages?",
   "delmsg.btn_1h": "Last 1h",
   "delmsg.btn_1d": "Last 1d",
@@ -160,6 +164,7 @@
   "startup.notify": "🚀 `@%s` is up and running",
   "db.connection_lost": "🔴 Database connection lost\n\n%s\n\nReconnecting…",
   "db.connection_recovered": "🟢 Database connection recovered",
+  "backup.failed": "⚠️ Scheduled database backup FAILED\n\n%s\n\nThe database itself is fine - only the backup copy was not written. Check the Database Backup settings and the logs.",
 
   "muted.error": "❌ Error getting muted users",
   "muted.empty": "✅ No muted users at the moment.",

@@ -84,7 +84,7 @@ func (b *Bot) promptDeleteUserMessages(message *tgbotapi.Message, notice string,
 // logged as a "delete" action so the purge leaves an audit trail and the
 // removed messages can be marked as deleted in later creative-reply context. It
 // returns the number of messages successfully deleted from Telegram.
-func (b *Bot) deleteUserMessagesSince(userID, chatID int64, since time.Time) int {
+func (b *Bot) deleteUserMessagesSince(userID, chatID int64, since time.Time, adminID int64, adminName string) int {
 	ids, err := b.db.GetUserMessageIDsSince(userID, chatID, since)
 	if err != nil {
 		log.Printf("delmsg: error fetching messages for user %d in chat %d: %v", userID, chatID, err)
@@ -98,8 +98,8 @@ func (b *Bot) deleteUserMessagesSince(userID, chatID int64, since time.Time) int
 		userID:    userID,
 		chatID:    chatID,
 		username:  b.getUserDisplayName(userID),
-		adminID:   b.config.Admin.SuperAdminUserID,
-		adminName: b.getUserDisplayName(b.config.Admin.SuperAdminUserID),
+		adminID:   adminID,
+		adminName: adminName,
 	}
 
 	deleted := 0
@@ -154,6 +154,7 @@ func (b *Bot) handleDeleteUserMessagesAction(query *tgbotapi.CallbackQuery, part
 		return
 	}
 
-	count := b.deleteUserMessagesSince(userID, chatID, since)
+	adminID := int64(query.From.ID)
+	count := b.deleteUserMessagesSince(userID, chatID, since, adminID, getUserDisplayNameFromUser(query.From))
 	b.appendActionNotice(query.Message, i18n.Tf("delmsg.done", count), []string{"delmsg_"})
 }
