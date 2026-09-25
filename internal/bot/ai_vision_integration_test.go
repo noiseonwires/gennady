@@ -7,11 +7,111 @@ import (
 	"strings"
 	"testing"
 
+	"gennadium/internal/config"
 	"gennadium/internal/telegram"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func testPNG() []byte {
+	return []byte("\x89PNG\r\n\x1a\nimage-data")
+}
+
+func TestAnalyzeImageWithAI_MultimodalRequest(t *testing.T) {
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Visible text: HELLO. Meme: no."}}]}`))
+	})
+	model := fullModelConfig()
+	model.UseForImageAnalysis = true
+	b.config.AI.Enabled = true
+	b.config.AI.LightModel = config.AIModelConfigs{Configs: []config.AIModelConfig{model}}
+	b.config.AI.ContentModeration.AIImageAnalysisEnabled = true
+	b.config.AI.ContentModeration.AIImageAnalysisPrompt = config.PromptPair{
+		System: "custom image system prompt",
+		User:   "custom image user prompt",
+	}
+
+	out, flagged, err := b.analyzeImageWithAI(testPNG())
+	require.NoError(t, err)
+	assert.False(t, flagged)
+	assert.Contains(t, out, "HELLO")
+	require.Equal(t, 1, rt.count())
+	body := rt.last().Body
+	assert.Contains(t, body, `"content":[{"type":"text","text":"custom image user prompt"}`)
+	assert.Contains(t, body, `{"type":"image_url","image_url":{"url":"data:image/png;base64,`)
+	assert.Contains(t, body, `"detail":"high"`)
+	assert.Contains(t, body, "custom image system prompt")
+}
+
+func TestAnalyzeImageWithAI_UsesOnlyOptedInModels(t *testing.T) {
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	})
+	notEligible := fullModelConfig()
+	notEligible.DeploymentName = "text-only"
+	eligible := fullModelConfig()
+	eligible.DeploymentName = "vision-model"
+	eligible.UseForImageAnalysis = true
+	b.config.AI.Enabled = true
+	b.config.AI.LightModel = config.AIModelConfigs{Configs: []config.AIModelConfig{notEligible, eligible}}
+	b.config.AI.ContentModeration.AIImageAnalysisEnabled = true
+
+	_, _, err := b.analyzeImageWithAI(testPNG())
+	require.NoError(t, err)
+	require.Equal(t, 1, rt.count())
+	assert.Contains(t, rt.last().Path, "/vision-model/")
+	assert.NotContains(t, rt.last().Path, "/text-only/")
+}
+
+func TestAnalyzeImageWithAI_ModelFailover(t *testing.T) {
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/first/") {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"unavailable"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"fallback result"}}]}`))
+	})
+	first := fullModelConfig()
+	first.DeploymentName = "first"
+	first.UseForImageAnalysis = true
+	second := fullModelConfig()
+	second.DeploymentName = "second"
+	second.UseForImageAnalysis = true
+	b.config.AI.Enabled = true
+	b.config.AI.LightModel = config.AIModelConfigs{Configs: []config.AIModelConfig{first, second}}
+	b.config.AI.ContentModeration.AIImageAnalysisEnabled = true
+
+	out, _, err := b.analyzeImageWithAI(testPNG())
+	require.NoError(t, err)
+	assert.Equal(t, "fallback result", out)
+	assert.Equal(t, 2, rt.count())
+	assert.Contains(t, rt.last().Path, "/second/")
+}
+
+func TestDescribeImageWithFallback_AIFailureUsesVision(t *testing.T) {
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/chat/completions") {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"model has no vision"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"captionResult":{"text":"vision fallback","confidence":0.9}}`))
+	})
+	model := fullModelConfig()
+	model.UseForImageAnalysis = true
+	b.config.AI.Enabled = true
+	b.config.AI.LightModel = config.AIModelConfigs{Configs: []config.AIModelConfig{model}}
+	b.config.AI.ContentModeration.AIImageAnalysisEnabled = true
+	b.config.AI.ContentModeration.VisionEnabled = true
+	b.config.AI.ContentModeration.VisionEndpoint = "https://vision.example.com"
+
+	out, _, err := b.describeImageWithFallback(testPNG())
+	require.NoError(t, err)
+	assert.Contains(t, out, "vision fallback")
+	assert.Equal(t, 2, rt.count())
+}
 
 func TestAnalyzeImageWithVision_Disabled(t *testing.T) {
 	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {})

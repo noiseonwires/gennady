@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"gennadium/internal/config"
 	"gennadium/internal/i18n"
 
 	tgbotapi "gennadium/internal/telegram"
@@ -47,6 +49,93 @@ type AzureContentSafetyResponse struct {
 		Category string `json:"category"`
 		Severity int    `json:"severity"`
 	} `json:"categoriesAnalysis"`
+}
+
+func (b *Bot) imageAnalysisModels() config.AIModelConfigs {
+	models := make([]config.AIModelConfig, 0)
+	seen := make(map[string]struct{})
+	appendEligible := func(configs config.AIModelConfigs) {
+		for _, model := range configs.Configs {
+			if !model.IsEnabled() || !model.UseForImageAnalysis {
+				continue
+			}
+			key := model.ResolveProvider() + "\x00" + strings.TrimSuffix(model.Endpoint, "/") + "\x00" + model.DeploymentName
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			models = append(models, model)
+		}
+	}
+	appendEligible(b.config.AI.LightModel)
+	appendEligible(b.config.AI.FullModel)
+	return config.AIModelConfigs{Configs: models}
+}
+
+// analyzeImageWithAI sends an inline image to the configured multimodal model
+// pool. Models must explicitly opt in because ordinary text deployments may not
+// accept image_url content parts.
+func (b *Bot) analyzeImageWithAI(imageData []byte) (string, bool, error) {
+	if !b.config.AI.Enabled || !b.config.AI.ContentModeration.AIImageAnalysisEnabled {
+		return "", false, fmt.Errorf("AI image analysis is not enabled")
+	}
+
+	models := b.imageAnalysisModels()
+	if models.Count() == 0 {
+		return "", false, fmt.Errorf("no AI model is enabled for image analysis")
+	}
+
+	contentType := http.DetectContentType(imageData)
+	if !strings.HasPrefix(contentType, "image/") {
+		return "", false, fmt.Errorf("unsupported image content type %q", contentType)
+	}
+	imageURL := "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(imageData)
+
+	prompt := b.config.AI.ContentModeration.AIImageAnalysisPrompt
+	userPrompt := strings.TrimSpace(prompt.User)
+	if userPrompt == "" {
+		userPrompt = "Analyze the attached image."
+	}
+	messages := []AIRequestMessage{
+		{Role: "system", Content: prompt.System},
+		{Role: "user", Content: []AIMessageContentPart{
+			{Type: "text", Text: userPrompt},
+			{Type: "image_url", ImageURL: &AIImageURL{URL: imageURL, Detail: "high"}},
+		}},
+	}
+
+	var result string
+	var lastErr error
+	for index := 0; index < models.Count(); index++ {
+		model := models.Get(index)
+		result, lastErr = b.callAzureOpenAIWithMessagesWithConfig(
+			"image_analysis", messages, userPrompt, prompt.System, model, 1000, index > 0,
+		)
+		if lastErr == nil {
+			break
+		}
+		var contentFilterErr *ContentFilterError
+		if errors.As(lastErr, &contentFilterErr) {
+			return "", false, lastErr
+		}
+		log.Printf("AI image analysis failed for %s/%s: %v", model.Endpoint, model.DeploymentName, lastErr)
+	}
+	if lastErr != nil {
+		return "", false, fmt.Errorf("all configured AI image-analysis models failed: %w", lastErr)
+	}
+
+	contentSafetyFlagged := false
+	if b.config.AI.ContentModeration.ContentSafetyEnabled {
+		flagged, details, err := b.analyzeImageContentSafety(imageData)
+		if err != nil {
+			log.Printf("Error analyzing AI-processed image with Content Safety API: %v", err)
+		} else if flagged {
+			contentSafetyFlagged = true
+			result = fmt.Sprintf("[Content Safety: %s] %s", strings.TrimSpace(details), result)
+		}
+	}
+
+	return strings.TrimSpace(result), contentSafetyFlagged, nil
 }
 
 // analyzeImageWithVision analyzes an image using Azure Vision API.
@@ -372,12 +461,13 @@ func (b *Bot) analyzeImageContentSafety(imageData []byte) (bool, string, error) 
 }
 
 // describeImageWithFallback describes an image using the descriptive analysis
-// chain (Azure Vision → OCR.space) and returns the textual description plus
+// chain (multimodal AI → Azure Vision → OCR.space) and returns the textual description plus
 // whether Azure Content Safety (invoked inside the Vision step when
 // content_safety_enabled) flagged it. It is used only as a fallback when a
 // dedicated Content Safety call is unavailable. Returns ("", false, nil) when
 // neither Vision nor OCR.space is configured.
 func (b *Bot) describeImageWithFallback(imageData []byte) (string, bool, error) {
+	aiEnabled := b.config.AI.Enabled && b.config.AI.ContentModeration.AIImageAnalysisEnabled
 	visionEnabled := b.config.AI.ContentModeration.VisionEnabled
 	ocrSpaceEnabled := b.config.AI.ContentModeration.OCRSpaceEnabled
 
@@ -385,14 +475,19 @@ func (b *Bot) describeImageWithFallback(imageData []byte) (string, bool, error) 
 	var flagged bool
 	var err error
 
-	if visionEnabled {
+	if aiEnabled {
+		desc, flagged, err = b.analyzeImageWithAI(imageData)
+		if err != nil {
+			log.Printf("Image analysis (AI) error: %v", err)
+		}
+	}
+	if desc == "" && visionEnabled {
 		desc, flagged, err = b.analyzeImageWithVision(imageData)
 		if err != nil {
 			log.Printf("Image analysis (Vision) error: %v", err)
 		}
 	}
-	// Fallback order: Azure Vision → OCR.space.
-	if (err != nil || !visionEnabled) && ocrSpaceEnabled && desc == "" {
+	if desc == "" && ocrSpaceEnabled {
 		desc, err = b.analyzeImageWithOCRSpace(imageData)
 		if err != nil {
 			log.Printf("Image analysis (OCR.space) error: %v", err)
@@ -405,7 +500,7 @@ func (b *Bot) describeImageWithFallback(imageData []byte) (string, bool, error) 
 // whole public profile on their first message in a moderation chat: their name,
 // bio and profile photo, plus their linked personal channel (name, description,
 // photo) when present. Photos are screened with Azure Content Safety first and
-// only described via Vision / OCR.space when Content Safety is unavailable or
+// only described via multimodal AI / Vision / OCR.space when Content Safety is unavailable or
 // fails; all the gathered text is judged by the NewUserProfilePrompt AI prompt.
 // A flagged photo is recorded directly; the AI verdict is recorded too. Findings
 // are appended to the user's profile so the AI moderation step can take them
@@ -530,9 +625,9 @@ func (b *Bot) screenProfileImage(userID int64, fileID, label string) (string, bo
 			}
 			return "", false
 		}
-		log.Printf("New-user profile check: content safety error for %s of user %d, falling back to Vision/OCR: %v", label, userID, aerr)
+		log.Printf("New-user profile check: content safety error for %s of user %d, falling back to AI/Vision/OCR: %v", label, userID, aerr)
 	}
-	// Content Safety not configured or failed → describe via Vision → OCR.space.
+	// Content Safety not configured or failed → describe via AI → Vision → OCR.space.
 	desc, flagged, aerr := b.describeImageWithFallback(data)
 	if aerr != nil {
 		log.Printf("New-user profile check: error analyzing %s for user %d: %v", label, userID, aerr)

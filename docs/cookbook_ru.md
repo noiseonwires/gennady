@@ -84,15 +84,15 @@ flowchart LR
 
 | Промпт (`ai.…`) | Плейсхолдеры |
 | --- | --- |
-| `content_moderation.prompt` | `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reply_to}}`, `{{new_user_rules}}` |
-| `content_moderation.warning_prompt` | `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{reputation}}` |
-| `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}` |
+| `content_moderation.prompt` | `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}`, `{{reply_to}}`, `{{new_user_rules}}` |
+| `content_moderation.warning_prompt` | `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
+| `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
 | `morning_greeting.prompt` | `{{weekday}}`, `{{date}}`, `{{weather}}`, `{{weather_ru}}`, `{{holidays}}`, `{{events}}` |
 | `daily_summary.prompt` | `{{messages}}` |
 | `message_summaries.prompt` | `{{message}}` |
 | `link_summaries.prompt` | `{{title}}`, `{{url}}`, `{{content}}`, `{{truncated_suffix}}` |
-| `user_profiles.prompt` | `{{username}}`, `{{messages}}` |
-| `user_profiles.update_prompt` | `{{username}}`, `{{messages}}`, `{{existing_profile}}` |
+| `user_profiles.prompt` | `{{username}}`, `{{messages}}`, `{{previous_days_messages}}` |
+| `user_profiles.update_prompt` | `{{username}}`, `{{messages}}`, `{{existing_profile}}`, `{{previous_days_messages}}` |
 | `website_watch.prompt` | `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}` |
 | `translation_prompt` / `rss.*` | `{{text}}` |
 
@@ -101,14 +101,15 @@ flowchart LR
 - `{{user_profile}}` разворачивается в **подробный блок** - текст ИИ-профиля + репутация,
   статистика предупреждений/мутов за 7 дней, график активности, отметка админа и
   предупреждения о повторном использовании @username. Максимум контекста, больше токенов.
-- `{{user_reputation}}` разворачивается в **компактный блок** - только оценка репутации и
-  пометка о подозрительном профиле (с причинами), если она есть. Дёшево по токенам; используйте,
-  когда нужна только оценка.
+- `{{user_reputation}}` разворачивается в **компактный блок** - градация и числовой балл,
+  отдельный вердикт ИИ при его наличии и находки подозрительного профиля. Дёшево по токенам;
+  используйте, когда полный текст профиля и история активности не нужны.
 
-Оба пусты, если не включено `ai.user_profiles.enabled: true` (или
-`content_moderation.new_user_profile_check_enabled: true`).
+При включённой событийной репутации (по умолчанию) оба содержат локальный для чата числовой
+балл и градацию даже без ИИ-профилей. Используйте `{{reputation_score}}` или
+`{{reputation_grade}}`, если нужен только исходный параметр.
 
-Оба работают и в `creative_replies.prompt` - бот может подстраивать шутки под собеседника
+Оба работают и в предупреждениях, и в `creative_replies.prompt` - бот может подстраивать текст под собеседника
 (например, мягче с новичками и язвительнее с завсегдатаями).
 
 **`{{new_user_rules}}`:** разворачивается в текст `ai.content_moderation.new_user_rules`
@@ -236,17 +237,21 @@ ai:
 
 ## Рецепт 5: Строгость с учётом репутации
 
-Включите ИИ-профили пользователей. Ежедневная задача строит короткий профиль для каждого
-активного пользователя, заканчивающийся строкой `Reputation: good|neutral|bad`. Эта репутация
-затем подставляется в модерацию, чтобы бот был мягче к проверенным завсегдатаям и строже к
-известным нарушителям.
+Событийная репутация включена по умолчанию. Реакции и подтверждённые действия модераторов
+формируют ограниченный, затухающий балл отдельно для каждого пользователя и чата.
+ИИ-профили остаются необязательным слабым свидетельством.
 
 ```yaml
+reputation:
+  weights:
+    warning: -5
+    long_mute: -10
 ai:
   user_profiles:
     enabled: true
     time: "04:50"          # время ежедневной пересборки (вне часа пик)
     skip_forever_muted_users: false
+    previous_days_messages_count: 10   # старые сообщения для {{previous_days_messages}}
   content_moderation:
     prompt:
       system: |
@@ -262,9 +267,13 @@ ai:
         «{{message}}»
 ```
 
-Петля обратной связи: сообщения → дневной профиль + репутация → подстановка в модерацию → более
-умные решения завтра. Используйте `{{user_reputation}}` вместо `{{user_profile}}`, если хотите
-тот же сигнал за долю стоимости токенов.
+Используйте `{{user_reputation}}` вместо `{{user_profile}}` для компактного блока или исходные
+`{{reputation_score}}` / `{{reputation_grade}}` для минимального расхода токенов. Оценка
+ИИ-профиля заменяет предыдущую небольшую поправку и не накапливается повторно.
+
+Добавьте в промпты профиля `{{previous_days_messages}}`, чтобы модель видела и последние
+`previous_days_messages_count` сообщений за предыдущие дни - тогда один неудачный вечер не
+перечеркнёт месяцы нормального поведения (и наоборот).
 
 ---
 
@@ -278,16 +287,16 @@ ai:
 проблем с лимитами): имя, био и фото профиля, плюс **привязанный личный канал** (название,
 описание, фото), если он есть.
 
-Фотографии сначала проверяются через **Azure Content Safety**; Azure Vision и OCR.space нужны
-только чтобы *описать* фото, когда Content Safety недоступен или дал сбой. Затем *весь*
-собранный текст оценивает отдельный AI-промпт. **Content Safety не требуется** - если он
-выключен, фото описывают Vision или OCR.space.
+Фотографии сначала проверяются через **Azure Content Safety**; мультимодальный ИИ, Azure Vision
+и OCR.space нужны только чтобы *описать* фото, когда Content Safety недоступен или дал сбой.
+Затем *весь* собранный текст оценивает отдельный AI-промпт. **Content Safety не требуется** -
+если он выключен, фото описывает отмеченная мультимодальная модель, Vision или OCR.space.
 
 ```yaml
 ai:
   content_moderation:
     new_user_profile_check_enabled: true
-    # Для фото предпочтителен Content Safety; Vision/OCR.space - резервные
+    # Для фото предпочтителен Content Safety; ИИ/Vision/OCR - резервные
     # описатели. Настройте хотя бы один, чтобы фото можно было анализировать:
     content_safety_enabled: true    # основной сигнал по фото (рекомендуется)
     vision_enabled: true            # резервный описатель (или ocrspace_enabled)
@@ -376,17 +385,25 @@ ai:
 
 ---
 
-## Рецепт 8: Модерация изображений (Vision / OCR / Content Safety)
+## Рецепт 8: Модерация изображений (мультимодальный ИИ / Vision / OCR / Content Safety)
 
 Ловите нарушения, спрятанные в скриншотах и мемах, извлекая их текст/содержимое и пропуская
-через **те же** правила модерации. Два источника, используются цепочкой резервирования
-**Azure Vision → OCR.space**:
+через **те же** правила модерации. Описатели используются цепочкой резервирования
+**мультимодальный ИИ → Azure Vision → OCR.space**:
 
 ```yaml
 ai:
+  light_model:
+    - provider: "azure"
+      endpoint: "https://YOUR.openai.azure.com/"
+      api_key: "KEY"
+      deployment_name: "gpt-4o-mini"
+      use_for_image_analysis: true
   content_moderation:
+    ai_image_analysis_enabled: true
+
     # Лучшая точность - Azure Vision (описание + OCR)
-    vision_enabled: true
+    vision_enabled: false
     vision_endpoint: "https://YOUR.cognitiveservices.azure.com/"
     vision_api_key: "KEY"
 
@@ -397,7 +414,8 @@ ai:
 ```
 
 Извлечённый текст попадает в ваш обычный промпт модерации, поэтому все рецепты вердиктов/правил
-работают и для картинок. Для надёжной модерации предпочтительнее **Azure Vision**.
+работают и для картинок. Оставьте **Content Safety** включённым отдельно, если его
+детерминированный сигнал безопасности запускает автоматические действия.
 
 ---
 

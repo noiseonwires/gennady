@@ -3,6 +3,7 @@
 package tgadapter
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	tgbot "github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +27,7 @@ type fakeTelegram struct {
 	server    *httptest.Server
 	responses map[string]string
 	lastForm  map[string]url.Values
+	lastBody  map[string][]byte
 }
 
 func newFakeTelegram(t *testing.T) *fakeTelegram {
@@ -35,9 +38,17 @@ func newFakeTelegram(t *testing.T) *fakeTelegram {
 			"getMe": `{"ok":true,"result":{"id":42,"is_bot":true,"username":"testbot","first_name":"Test"}}`,
 		},
 		lastForm: map[string]url.Values{},
+		lastBody: map[string][]byte{},
 	}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		f.lastBody[method] = body
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		// The library sends requests as multipart/form-data; collect the
 		// non-file form values so tests can inspect what was sent.
 		vals := url.Values{}
@@ -380,6 +391,32 @@ func TestAdapter_DeleteWebhook(t *testing.T) {
 
 	require.NoError(t, a.DeleteWebhook(true))
 	assert.Equal(t, "true", f.lastForm["deleteWebhook"].Get("drop_pending_updates"))
+}
+
+func TestAdapter_DeleteWebhookWithoutDropPendingSendsEmptyBody(t *testing.T) {
+	f := newFakeTelegram(t)
+	f.set("deleteWebhook", `{"ok":true,"result":true}`)
+	a := f.adapter(t)
+
+	require.NoError(t, a.DeleteWebhook(false))
+	assert.Empty(t, f.lastBody["deleteWebhook"])
+}
+
+func TestToInboundMessage_PreservesEntityLinks(t *testing.T) {
+	msg := toInboundMessage(&models.Message{
+		Text: "Article",
+		Entities: []models.MessageEntity{
+			{Type: "text_link", Offset: 0, Length: 7, URL: "https://example.com/article"},
+		},
+		CaptionEntities: []models.MessageEntity{
+			{Type: "text_link", Offset: 0, Length: 7, URL: "https://example.com/caption"},
+		},
+	})
+
+	require.Len(t, msg.Entities, 1)
+	assert.Equal(t, "https://example.com/article", msg.Entities[0].URL)
+	require.Len(t, msg.CaptionEntities, 1)
+	assert.Equal(t, "https://example.com/caption", msg.CaptionEntities[0].URL)
 }
 
 // TestAdapter_WrapErr_NonAPIError verifies a transport error is returned

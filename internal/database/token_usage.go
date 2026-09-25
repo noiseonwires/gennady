@@ -2,7 +2,10 @@
 // Copyright (c) 2025 Kirill aka Noiseonwires
 package database
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // TokenUsageStat holds daily and cumulative token counters for a single
 // (service, model) pair.
@@ -88,4 +91,43 @@ func (db *DB) GetTokenUsageStats(today string) ([]TokenUsageStat, error) {
 		return result[i].Model < result[j].Model
 	})
 	return result, nil
+}
+
+// DeleteTokenUsageForUnconfiguredModels removes usage history for models that
+// are no longer present in the configuration and returns the number of deleted
+// per-day rows.
+func (db *DB) DeleteTokenUsageForUnconfiguredModels(configuredModels []string) (int64, error) {
+	seen := make(map[string]struct{}, len(configuredModels))
+	models := make([]string, 0, len(configuredModels))
+	for _, model := range configuredModels {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		models = append(models, model)
+	}
+
+	query := `DELETE FROM token_usage`
+	args := make([]any, len(models))
+	if len(models) > 0 {
+		query += ` WHERE model NOT IN (` + strings.TrimRight(strings.Repeat("?,", len(models)), ",") + `)`
+		for i, model := range models {
+			args[i] = model
+		}
+	}
+
+	var deleted int64
+	err := db.retryOnTransientError(func() error {
+		result, err := db.conn.Exec(query, args...)
+		if err != nil {
+			return err
+		}
+		deleted, err = result.RowsAffected()
+		return err
+	}, "delete token usage for unconfigured models")
+	return deleted, err
 }

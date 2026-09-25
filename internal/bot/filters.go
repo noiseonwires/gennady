@@ -43,16 +43,20 @@ func (b *Bot) recordMessage(mc *MsgContext) (string, bool) {
 	message := mc.EnhancedMsg
 
 	// Message text is already enhanced with image analysis at this point.
-	messageText := message.Text
-	if messageText == "" && message.Caption != "" {
-		messageText = message.Caption
-	}
-	// For media payloads we don't process (stickers, gifs, videos, voice, …)
-	// store a short descriptor tag in place of the missing text so the chat
-	// history in message_info isn't a wall of blank rows.
-	if messageText == "" {
-		if tag := mediaTypeTag(message); tag != "" {
+	messageText := message.TextWithEntityLinks()
+
+	// The stored history always carries a short descriptor tag for the message's
+	// media payload ("<photo>", "<sticker 😀>", …), so an attachment stays
+	// visible even when the message also has a caption or an image analysis.
+	// When there is no text at all the tag doubles as the moderated text so the
+	// chat history in message_info isn't a wall of blank rows.
+	storedText := messageText
+	if tag := mediaTypeTag(message); tag != "" {
+		if storedText == "" {
+			storedText = tag
 			messageText = tag
+		} else {
+			storedText = tag + " " + storedText
 		}
 	}
 
@@ -81,11 +85,12 @@ func (b *Bot) recordMessage(mc *MsgContext) (string, bool) {
 		ChatID:           message.Chat.ID,
 		UserID:           userID,
 		Username:         username,
-		Text:             messageText,
+		Text:             storedText,
 		ReplyToMessageID: replyToMessageID,
 		MessageThreadID:  mc.Scope.Topic,
 		QuoteText:        quoteText,
-		Timestamp:        time.Now(),
+		MediaGroupID:     message.MediaGroupID,
+		Timestamp:        messageTimestamp(message),
 	}
 
 	// For forwarded messages, prepend a "<forwarded from: …>" marker to the
@@ -109,6 +114,13 @@ func (b *Bot) recordMessage(mc *MsgContext) (string, bool) {
 
 	b.recordNewMessage(mc, messageInfo)
 	return messageText, true
+}
+
+func messageTimestamp(message *telegram.Message) time.Time {
+	if message != nil && message.Date > 0 {
+		return time.Unix(int64(message.Date), 0).UTC()
+	}
+	return time.Now()
 }
 
 // recordEditedMessage updates message_info for an edited message, preserving the
@@ -451,11 +463,13 @@ func (b *Bot) recordModStat(stat string) {
 	}
 }
 
-// setMessageReaction sets an emoji reaction on a message
-func (b *Bot) setMessageReaction(chatID int64, messageID int, emoji string) {
+// setMessageReaction sets an emoji reaction on a message.
+func (b *Bot) setMessageReaction(chatID int64, messageID int, emoji string) error {
 	if err := b.tg.SetMessageReaction(chatID, messageID, emoji); err != nil {
 		log.Printf("Error setting reaction %s: %v", emoji, err)
+		return err
 	}
+	return nil
 }
 
 // clearMessageReaction clears all reactions from a message
@@ -539,6 +553,36 @@ func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText strin
 		plan = append(plan, actionStep{action: config.ModerationActionReport, rule: nil})
 	}
 
+	adminNotificationAllowed := false
+	if b.config.Admin.ChatID != 0 {
+		for _, step := range plan {
+			switch step.action {
+			case config.ModerationActionDelete, config.ModerationActionWarn, config.ModerationActionMute:
+				adminNotificationAllowed = step.rule == nil || step.rule.IsNotifyAdmin()
+			default: // report or unknown action, which falls back to report
+				adminNotificationAllowed = true
+			}
+			if adminNotificationAllowed {
+				break
+			}
+		}
+	}
+	if adminNotificationAllowed {
+		delay := time.Duration(b.config.AI.ContentModeration.AdminNotificationDelaySeconds) * time.Second
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		emoji := b.config.Reactions.BadMessage
+		if isContentFilter {
+			emoji = b.config.Reactions.ContentFilter
+		}
+		if err := b.setMessageReaction(message.Chat.ID, message.MessageID, emoji); err != nil {
+			adminNotificationAllowed = false
+			log.Printf("Skipping admin notification for message %d in chat %d: message is no longer available: %v",
+				message.MessageID, message.Chat.ID, err)
+		}
+	}
+
 	// Count a single auto-action if any step performs a destructive automatic
 	// action (delete/warn/mute). A report-only verdict is left for the admin and
 	// does not count as an auto-action.
@@ -559,11 +603,11 @@ func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText strin
 			i+1, len(plan), step.action, message.MessageID)
 		switch step.action {
 		case config.ModerationActionDelete:
-			b.autoModerateDelete(message, messageText, isContentFilter, step.rule)
+			b.autoModerateDelete(message, messageText, isContentFilter, step.rule, adminNotificationAllowed)
 		case config.ModerationActionWarn:
-			b.autoModerateWarn(message, messageText, step.rule)
+			b.autoModerateWarn(message, messageText, step.rule, adminNotificationAllowed)
 		case config.ModerationActionMute:
-			b.autoModerateMute(message, messageText, step.rule)
+			b.autoModerateMute(message, messageText, step.rule, adminNotificationAllowed)
 		default: // report (or unknown → safest behavior)
 			// Hand the report step the list of *other* automatic actions in
 			// this chain so the admin card can summarise them and toggle its
@@ -576,7 +620,7 @@ func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText strin
 				}
 				others = append(others, chainAction{action: peer.action, rule: peer.rule})
 			}
-			b.autoModerateReport(message, messageText, isContentFilter, step.rule, others, decisionDetails)
+			b.autoModerateReport(message, messageText, isContentFilter, step.rule, others, decisionDetails, adminNotificationAllowed)
 		}
 		log.Printf("Auto-moderation: finished step %d/%d action=%s for message %d",
 			i+1, len(plan), step.action, message.MessageID)

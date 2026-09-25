@@ -48,8 +48,8 @@
 
   "mod.violation_info": "📊 Last 7d: ⚠️ %d warnings | 🔇 %d mutes | 📋 %d total actions",
   "mod.user_new": "🆕 NEW USER: this author's first message was seen within the new-user window — apply extra scrutiny to first-time posters.",
-  "mod.user_profile": "👤 Profile (%s, reputation: %s): %s",
-  "mod.user_reputation": "👤 User reputation: %s",
+  "mod.user_profile": "👤 AI profile (%s, AI reputation: %s): %s",
+  "mod.user_reputation": "👤 AI reputation: %s",
   "mod.user_reputation_suspicious": "⚠️ This profile was flagged as SUSPICIOUS by automated screening — treat the author with extra caution.",
   "mod.user_profile_suspicious": "🚩 SUSPICIOUS PROFILE: automated screening flagged this user's profile (photo, bio and/or linked channel). Weigh this when moderating.",
   "mod.username_reuse_muted_priors": "⚠️ Username @%s was previously used by %d other account(s) with a mute history in this chat (%d mute(s) total): %s. Same handle, different person — take with caution.",
@@ -62,6 +62,7 @@
   "profile.digest_replying_to": "replying to %s: \"%s\"",
   "profile.digest_period_24h": "last 24h",
   "profile.digest_period_days": "last %dd",
+  "profile.digest_previous_days_header": "Earlier messages from previous days (%d):",
   "profile.digest_moderation_stats": "\nModeration stats (%s): %d warnings, %d mutes, %d cleared (not a violation)\n",
   "prof.first_seen": "first seen",
   "prof.days_ago": "%d days ago",
@@ -235,6 +236,7 @@
 
   "ai.creative_reply_with_quote": "User replied to this message: \"%s\"\n\nAnd quoted the following text:\n\"%s\"\n\n%s",
   "ai.creative_reply": "Reply to this message: \"%s\"\n\n%s",
+  "ai.web_search_sources": "Sources:",
   "ai.context_reply_chain": "Reply chain context (from oldest to newest):\n",
   "ai.context_adjacent_messages": "\nOther nearby messages from chain participants:\n",
   "ai.context_recent_messages": "\nRecent messages in chat context:\n",

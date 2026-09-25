@@ -20,7 +20,7 @@ func (h *apiHandler) handleGetProfiles(w http.ResponseWriter, r *http.Request) {
 	// Pagination + sort params (server-side, mirroring the messages list).
 	limit := 25
 	offset := 0
-	sortKey := "discovery" // "discovery" (newest first-seen first) | "name"
+	sortKey := "discovery" // "discovery" (newest first-seen first) | "name" | "score"
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
 			limit = n
@@ -31,7 +31,7 @@ func (h *apiHandler) handleGetProfiles(w http.ResponseWriter, r *http.Request) {
 			offset = n
 		}
 	}
-	if v := r.URL.Query().Get("sort"); v == "name" || v == "discovery" {
+	if v := r.URL.Query().Get("sort"); v == "name" || v == "discovery" || v == "score" {
 		sortKey = v
 	}
 	// Optional case-insensitive username / display-name substring filter.
@@ -48,12 +48,19 @@ func (h *apiHandler) handleGetProfiles(w http.ResponseWriter, r *http.Request) {
 
 	// Enrich each profile with general tracking info (name history, 7d activity).
 	// Also include users that have only general tracking data but no AI profile yet.
+	type profileReputationScore struct {
+		ChatID   int64   `json:"chat_id"`
+		ChatName string  `json:"chat_name,omitempty"`
+		Score    float64 `json:"score"`
+		Grade    string  `json:"grade"`
+	}
 	type enrichedProfile struct {
 		database.UserProfile
-		DisplayName  string                     `json:"display_name,omitempty"`
-		NameHistory  []database.UserNameHistory `json:"name_history,omitempty"`
-		ActivityPlot string                     `json:"activity_plot,omitempty"`
-		AIProfile    bool                       `json:"ai_profile"`
+		DisplayName      string                     `json:"display_name,omitempty"`
+		NameHistory      []database.UserNameHistory `json:"name_history,omitempty"`
+		ActivityPlot     string                     `json:"activity_plot,omitempty"`
+		AIProfile        bool                       `json:"ai_profile"`
+		ReputationScores []profileReputationScore   `json:"reputation_scores,omitempty"`
 	}
 
 	// latestNames returns the latest (username, display_name) recorded for a
@@ -105,6 +112,17 @@ func (h *apiHandler) handleGetProfiles(w http.ResponseWriter, r *http.Request) {
 			AIProfile:    p.Profile != "" || p.TgProfileAnalysis != "",
 		})
 	}
+	if ids, err := h.db.GetReputationUserIDs(); err == nil {
+		for _, uid := range ids {
+			if known[uid] {
+				continue
+			}
+			known[uid] = true
+			enriched = append(enriched, enrichedProfile{
+				UserProfile: database.UserProfile{UserID: uid, Reputation: "neutral"},
+			})
+		}
+	}
 
 	// Append tracked-only users (no AI profile row).
 	if ids, err := h.db.GetAllTrackedUserIDs(); err == nil {
@@ -112,6 +130,7 @@ func (h *apiHandler) handleGetProfiles(w http.ResponseWriter, r *http.Request) {
 			if known[uid] {
 				continue
 			}
+			known[uid] = true
 			nh := nameHistByUser[uid]
 			username, displayName := latestNames(nh)
 			if username == "" {
@@ -167,6 +186,33 @@ func (h *apiHandler) handleGetProfiles(w http.ResponseWriter, r *http.Request) {
 		return strings.ToLower(ep.DisplayName)
 	}
 
+	reputationEnabled := h.config.Reputation.Enabled == nil || *h.config.Reputation.Enabled
+	chatIDs := h.config.Moderation.ChatIDs.All()
+	var scoresByUser map[int64]map[int64]database.ReputationScore
+	if sortKey == "score" && reputationEnabled && len(enriched) > 0 && len(chatIDs) > 0 {
+		userIDs := make([]int64, len(enriched))
+		for i := range enriched {
+			userIDs[i] = enriched[i].UserID
+		}
+		var scoreErr error
+		scoresByUser, scoreErr = h.db.GetReputationScores(userIDs, chatIDs, webReputationPolicy(h.config.Reputation), time.Now())
+		if scoreErr != nil {
+			log.Printf("WebUI: failed to bulk-load reputation scores for sorting: %v", scoreErr)
+			scoresByUser = nil
+		}
+	}
+	lowestScore := func(userID int64) float64 {
+		byChat := scoresByUser[userID]
+		lowest := 0.0
+		for i, chatID := range chatIDs {
+			score := byChat[chatID].Score
+			if i == 0 || score < lowest {
+				lowest = score
+			}
+		}
+		return lowest
+	}
+
 	sort.SliceStable(enriched, func(i, j int) bool {
 		a, b := enriched[i], enriched[j]
 		if sortKey == "name" {
@@ -177,6 +223,13 @@ func (h *apiHandler) handleGetProfiles(w http.ResponseWriter, r *http.Request) {
 			}
 			if ka != kb {
 				return ka < kb
+			}
+			return a.UserID < b.UserID
+		}
+		if sortKey == "score" {
+			sa, sb := lowestScore(a.UserID), lowestScore(b.UserID)
+			if sa != sb {
+				return sa < sb
 			}
 			return a.UserID < b.UserID
 		}
@@ -200,6 +253,40 @@ func (h *apiHandler) handleGetProfiles(w http.ResponseWriter, r *http.Request) {
 	page := enriched[start:end]
 	if page == nil {
 		page = []enrichedProfile{}
+	}
+
+	// Reputation is intentionally enriched only after pagination. The old path
+	// queried once per user per chat before pagination, which becomes hundreds
+	// or thousands of network round trips with a remote database.
+	if reputationEnabled && len(page) > 0 && len(chatIDs) > 0 {
+		if scoresByUser == nil {
+			userIDs := make([]int64, len(page))
+			for i := range page {
+				userIDs[i] = page[i].UserID
+			}
+			var scoreErr error
+			scoresByUser, scoreErr = h.db.GetReputationScores(userIDs, chatIDs, webReputationPolicy(h.config.Reputation), time.Now())
+			if scoreErr != nil {
+				log.Printf("WebUI: failed to bulk-load reputation scores: %v", scoreErr)
+				scoresByUser = nil
+			}
+		}
+		if scoresByUser != nil {
+			chatNames := make(map[int64]string, len(chatIDs))
+			for _, chatID := range chatIDs {
+				chatNames[chatID] = h.resolveChatName(chatID)
+			}
+			for i := range page {
+				byChat := scoresByUser[page[i].UserID]
+				page[i].ReputationScores = make([]profileReputationScore, 0, len(chatIDs))
+				for _, chatID := range chatIDs {
+					score := byChat[chatID]
+					page[i].ReputationScores = append(page[i].ReputationScores, profileReputationScore{
+						ChatID: chatID, ChatName: chatNames[chatID], Score: score.Score, Grade: score.Grade,
+					})
+				}
+			}
+		}
 	}
 
 	jsonResponse(w, map[string]interface{}{

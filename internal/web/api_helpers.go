@@ -19,6 +19,10 @@ import (
 // jsonResponse writes the given value as application/json with HTTP 200.
 func jsonResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, data)
+}
+
+func writeJSON(w http.ResponseWriter, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 

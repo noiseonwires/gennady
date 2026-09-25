@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,9 @@ import (
 const (
 	ProviderLocal  = "local"
 	ProviderRemote = "remote"
+
+	remoteStartupSlowOperationThreshold = 500 * time.Millisecond
+	currentSchemaVersion                = 1
 )
 
 // UserActivityWindowDays is the number of days of per-user daily message-count
@@ -105,6 +109,11 @@ type MessageInfo struct {
 	// when they replied without selecting a sub-quote). Used to give AI context
 	// the exact quoted fragment instead of the whole parent message.
 	QuoteText string `json:"quote_text"`
+	// MediaGroupID is Telegram's album id: every item of an album arrives as its
+	// own message carrying the same id. Persisted so the album can be treated as
+	// one logical post (grouped in AI context, deleted as a whole). Empty for
+	// standalone messages.
+	MediaGroupID string `json:"media_group_id,omitempty"`
 	// Reactions is the emoji→count map for the message, stored as JSON
 	// (e.g. {"\ud83d\udc4d":3}). Empty when there are no reactions.
 	Reactions string    `json:"reactions"`
@@ -146,7 +155,7 @@ type UserProfile struct {
 	UserID     int64  `json:"user_id"`
 	Username   string `json:"username"`
 	Profile    string `json:"profile"`
-	Reputation string `json:"reputation"` // "bad", "neutral", "good"
+	Reputation string `json:"reputation"` // "very_bad", "bad", "neutral", "good", "very_good"
 	// TgProfileAnalysis holds the new-member Telegram profile screening results
 	// (AI / vision / content-safety sub-checks that triggered), one finding per
 	// line. Kept separate from the AI-generated behavior `Profile` so the two
@@ -194,6 +203,13 @@ func ResolveProvider(provider, url, authToken string) string {
 // It accepts a Config to select the provider and connection details.
 func Init(cfg Config) (*DB, error) {
 	provider := ResolveProvider(cfg.Provider, cfg.URL, cfg.AuthToken)
+	startedAt := time.Now()
+	localDatabasePath := cfg.Path
+	if provider == ProviderLocal {
+		if absolutePath, pathErr := filepath.Abs(cfg.Path); pathErr == nil {
+			localDatabasePath = absolutePath
+		}
+	}
 
 	var conn *sql.DB
 	var err error
@@ -208,28 +224,75 @@ func Init(cfg Config) (*DB, error) {
 		return nil, fmt.Errorf("unsupported database provider: %q (supported: local, remote)", provider)
 	}
 	if err != nil {
+		if provider == ProviderLocal {
+			return nil, fmt.Errorf("failed to open local database file %q: %w", localDatabasePath, err)
+		}
 		return nil, fmt.Errorf("failed to open %s database: %w", provider, err)
 	}
 
 	db := &DB{conn: conn, provider: provider}
+	if db.IsRemote() {
+		log.Printf("🗄️ Initializing remote database...")
+	}
 
 	// SQLite PRAGMA settings only apply to local databases
 	if provider == ProviderLocal {
 		if err := db.enableWALMode(); err != nil {
-			return nil, fmt.Errorf("failed to enable WAL mode: %v", err)
+			_ = conn.Close()
+			return nil, fmt.Errorf("failed to enable WAL mode for local database file %q: %w", localDatabasePath, err)
 		}
 	}
 
 	if err := db.createTables(); err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 
-	if err := db.loadMuteCache(); err != nil {
+	if err := db.runStartupPhase("loading active mute cache", db.loadMuteCache); err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to load mute cache: %w", err)
 	}
 
-	log.Printf("✓ Database initialized (provider: %s)", provider)
+	log.Printf("✓ Database initialized (provider: %s, elapsed: %s)", provider, roundedDurationSince(startedAt))
 	return db, nil
+}
+
+func (db *DB) runStartupPhase(name string, operation func() error) error {
+	if !db.IsRemote() {
+		return operation()
+	}
+
+	log.Printf("🗄️ Remote database startup: %s...", name)
+	startedAt := time.Now()
+	if err := operation(); err != nil {
+		log.Printf("❌ Remote database startup: %s failed after %s: %v", name, roundedDurationSince(startedAt), err)
+		return err
+	}
+	log.Printf("✓ Remote database startup: %s completed in %s", name, roundedDurationSince(startedAt))
+	return nil
+}
+
+func (db *DB) logSlowStartupOperation(kind, name string, startedAt time.Time) {
+	if !db.IsRemote() {
+		return
+	}
+	elapsed := time.Since(startedAt)
+	if elapsed < remoteStartupSlowOperationThreshold {
+		return
+	}
+	log.Printf("⏱️ Remote database startup: slow %s %s took %s", kind, name, elapsed.Round(time.Millisecond))
+}
+
+func roundedDurationSince(startedAt time.Time) time.Duration {
+	return time.Since(startedAt).Round(time.Millisecond)
+}
+
+func schemaStatementName(query string) string {
+	fields := strings.Fields(query)
+	if len(fields) <= 5 {
+		return "unknown"
+	}
+	return strings.Trim(fields[5], "`\"[]")
 }
 
 // InitLocal is a convenience wrapper for local SQLite databases.
@@ -322,13 +385,84 @@ func (db *DB) enableWALMode() error {
 	return nil
 }
 
-// createTables creates all schema objects for a fresh database.
-//
-// As of the v1 public release the current shape is the baseline: there are
-// no in-process migrations and no external shell scripts. Any future
-// schema change should be introduced via a proper versioned migration
-// system (e.g. golang-migrate with an embedded migrations FS).
+// createTables creates or upgrades all schema objects. schema_metadata records
+// the last successfully applied application schema. Any schema change below
+// must increment currentSchemaVersion so existing databases are checked and
+// upgraded exactly once.
 func (db *DB) createTables() error {
+	if err := db.runStartupPhase("ensuring schema metadata", db.ensureSchemaMetadata); err != nil {
+		return fmt.Errorf("ensuring database schema metadata: %w", err)
+	}
+
+	var schemaVersion int
+	if err := db.runStartupPhase("checking schema version", func() error {
+		var err error
+		schemaVersion, err = db.getSchemaVersion()
+		return err
+	}); err != nil {
+		return fmt.Errorf("checking database schema version: %w", err)
+	}
+	if schemaVersion > currentSchemaVersion {
+		return fmt.Errorf(
+			"database schema version %d is newer than this application supports (maximum %d)",
+			schemaVersion,
+			currentSchemaVersion,
+		)
+	}
+
+	if schemaVersion < currentSchemaVersion {
+		if db.IsRemote() {
+			log.Printf("🗄️ Remote database startup: upgrading schema from version %d to %d...", schemaVersion, currentSchemaVersion)
+		}
+		if err := db.upgradeSchema(); err != nil {
+			return err
+		}
+		if err := db.runStartupPhase(fmt.Sprintf("recording schema version %d", currentSchemaVersion), func() error {
+			return db.setSchemaVersion(currentSchemaVersion)
+		}); err != nil {
+			return fmt.Errorf("recording database schema version: %w", err)
+		}
+	} else if db.IsRemote() {
+		log.Printf("✓ Remote database startup: schema version %d is current; full schema checks skipped", schemaVersion)
+	}
+
+	if err := db.runStartupPhase("synchronizing profile-screening reputation", db.syncProfileScreeningReputationEvents); err != nil {
+		return fmt.Errorf("syncing profile screening reputation: %w", err)
+	}
+
+	return nil
+}
+
+func (db *DB) ensureSchemaMetadata() error {
+	_, err := db.conn.Exec(`CREATE TABLE IF NOT EXISTS schema_metadata (
+		key TEXT NOT NULL PRIMARY KEY,
+		value INTEGER NOT NULL
+	)`)
+	return err
+}
+
+func (db *DB) getSchemaVersion() (int, error) {
+	var version int
+	err := db.conn.QueryRow(`SELECT value FROM schema_metadata WHERE key = 'schema_version'`).Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
+func (db *DB) setSchemaVersion(version int) error {
+	if version < 0 {
+		return fmt.Errorf("schema version cannot be negative: %d", version)
+	}
+	_, err := db.conn.Exec(`INSERT INTO schema_metadata (key, value) VALUES ('schema_version', ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, version)
+	return err
+}
+
+func (db *DB) upgradeSchema() error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS muted_users (
 			user_id INTEGER NOT NULL,
@@ -383,6 +517,7 @@ func (db *DB) createTables() error {
 			reply_to_message_id INTEGER,
 			message_thread_id INTEGER NOT NULL DEFAULT 0,
 			quote_text TEXT NOT NULL DEFAULT '',
+			media_group_id TEXT NOT NULL DEFAULT '',
 			reactions TEXT NOT NULL DEFAULT '',
 			timestamp DATETIME NOT NULL,
 			extra_info TEXT,
@@ -424,6 +559,27 @@ func (db *DB) createTables() error {
 			day_date TEXT NOT NULL,
 			count INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (user_id, day_date)
+		)`,
+		`CREATE TABLE IF NOT EXISTS reputation_events (
+			source_key TEXT NOT NULL PRIMARY KEY,
+			user_id INTEGER NOT NULL,
+			chat_id INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			component TEXT NOT NULL,
+			value REAL NOT NULL,
+			severity INTEGER NOT NULL DEFAULT 0,
+			half_life_days REAL NOT NULL DEFAULT 0,
+			occurred_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS reputation_clean_state (
+			user_id INTEGER NOT NULL,
+			chat_id INTEGER NOT NULL,
+			clean_count INTEGER NOT NULL DEFAULT 0,
+			sequence INTEGER NOT NULL DEFAULT 0,
+			day_date TEXT NOT NULL DEFAULT '',
+			day_count INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (user_id, chat_id)
 		)`,
 		// Web UI session token hashes. Persisted so multiple container instances
 		// sharing the same remote DB can validate the same token without storing it.
@@ -478,30 +634,37 @@ func (db *DB) createTables() error {
 		)`,
 	}
 
-	for _, query := range queries {
-		if _, err := db.conn.Exec(query); err != nil {
-			return err
+	if err := db.runStartupPhase(fmt.Sprintf("checking %d base tables", len(queries)), func() error {
+		for _, query := range queries {
+			startedAt := time.Now()
+			if _, err := db.conn.Exec(query); err != nil {
+				return err
+			}
+			db.logSlowStartupOperation("table check", schemaStatementName(query), startedAt)
 		}
-	}
-
-	// Create indexes for performance optimization
-	if err := db.createIndexes(); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 
 	// Apply additive column migrations for pre-existing databases. CREATE TABLE
 	// IF NOT EXISTS won't add columns to a table that already exists, so newly
-	// introduced columns are added here idempotently.
-	if err := db.ensureSchemaColumns(); err != nil {
+	// introduced columns are added here idempotently. Runs before createIndexes
+	// so an index may reference a freshly added column.
+	if err := db.runStartupPhase("checking additive schema columns", db.ensureSchemaColumns); err != nil {
+		return err
+	}
+
+	// Create indexes for performance optimization
+	if err := db.runStartupPhase("checking database indexes", db.createIndexes); err != nil {
 		return err
 	}
 
 	// One-time data migration: fold the legacy per-chat user_chat_first_seen
 	// table into user_profiles.first_seen_at (global earliest), then drop it.
-	if err := db.migrateFirstSeenToUserProfiles(); err != nil {
+	if err := db.runStartupPhase("checking legacy first-seen migration", db.migrateFirstSeenToUserProfiles); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -597,26 +760,32 @@ func (db *DB) ensureSchemaColumns() error {
 	migrations := []colMigration{
 		{"message_info", "message_thread_id", "ADD COLUMN message_thread_id INTEGER NOT NULL DEFAULT 0"},
 		{"message_info", "quote_text", "ADD COLUMN quote_text TEXT NOT NULL DEFAULT ''"},
+		{"message_info", "media_group_id", "ADD COLUMN media_group_id TEXT NOT NULL DEFAULT ''"},
 		{"message_info", "reactions", "ADD COLUMN reactions TEXT NOT NULL DEFAULT ''"},
 		{"message_info", "moderation_reason", "ADD COLUMN moderation_reason TEXT NOT NULL DEFAULT ''"},
 		{"user_profiles", "tg_profile_analysis", "ADD COLUMN tg_profile_analysis TEXT NOT NULL DEFAULT ''"},
 		{"user_profiles", "first_seen_at", "ADD COLUMN first_seen_at DATETIME NOT NULL DEFAULT ''"},
+		{"reputation_events", "severity", "ADD COLUMN severity INTEGER NOT NULL DEFAULT 0"},
 		{"warnings", "warning_message_id", "ADD COLUMN warning_message_id INTEGER NOT NULL DEFAULT 0"},
 		{"web_sessions", "actor_id", "ADD COLUMN actor_id INTEGER NOT NULL DEFAULT 0"},
 		{"web_sessions", "actor_name", "ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''"},
 	}
 
 	for _, m := range migrations {
+		startedAt := time.Now()
 		exists, err := db.columnExists(m.table, m.column)
 		if err != nil {
 			return fmt.Errorf("checking column %s.%s: %w", m.table, m.column, err)
 		}
+		db.logSlowStartupOperation("column check", m.table+"."+m.column, startedAt)
 		if exists {
 			continue
 		}
+		startedAt = time.Now()
 		if _, err := db.conn.Exec(fmt.Sprintf("ALTER TABLE %s %s", m.table, m.ddl)); err != nil {
 			return fmt.Errorf("adding column %s.%s: %w", m.table, m.column, err)
 		}
+		db.logSlowStartupOperation("column migration", m.table+"."+m.column, startedAt)
 		log.Printf("✓ Schema migration: added column %s.%s", m.table, m.column)
 	}
 	return nil
@@ -666,6 +835,13 @@ func (db *DB) createIndexes() error {
 		`CREATE INDEX IF NOT EXISTS idx_message_info_lookup ON message_info (message_id, chat_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_message_info_user ON message_info (user_id, chat_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_message_info_timestamp ON message_info (timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_message_info_chat_timestamp ON message_info (chat_id, timestamp DESC, message_id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_message_info_chat_topic_timestamp ON message_info (chat_id, message_thread_id, timestamp DESC, message_id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_message_info_media_group ON message_info (chat_id, media_group_id)`,
+
+		// Indexes for reputation events
+		`CREATE INDEX IF NOT EXISTS idx_reputation_events_user_chat ON reputation_events (user_id, chat_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_reputation_events_occurred ON reputation_events (occurred_at)`,
 
 		// Indexes for actions table
 		`CREATE INDEX IF NOT EXISTS idx_actions_user_lookup ON actions (user_id, chat_id, action_type)`,
@@ -695,9 +871,11 @@ func (db *DB) createIndexes() error {
 	}
 
 	for _, index := range indexes {
+		startedAt := time.Now()
 		if _, err := db.conn.Exec(index); err != nil {
 			return fmt.Errorf("failed to create index: %w", err)
 		}
+		db.logSlowStartupOperation("index check", schemaStatementName(index), startedAt)
 	}
 
 	return nil

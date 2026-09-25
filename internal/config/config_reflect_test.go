@@ -24,6 +24,9 @@ func TestSetDefaults(t *testing.T) {
 	assert.NotZero(t, c.MessageDeletion.CleanupIntervalHours)
 	assert.Equal(t, 24, c.AI.ContentModeration.NewUserWindowHours)
 	assert.Equal(t, 500, c.AI.ContentModeration.ReplyContextMaxChars)
+	assert.Equal(t, 3, c.AI.ContentModeration.AdminNotificationDelaySeconds)
+	require.NotNil(t, c.AI.CreativeReplies.ContextOnlyCurrentTopic)
+	assert.True(t, *c.AI.CreativeReplies.ContextOnlyCurrentTopic)
 	// Update-processing defaults: in-order single worker, stats on every 10 min.
 	assert.Equal(t, 1, c.UpdateProcessing.Workers)
 	assert.Equal(t, 600, c.UpdateProcessing.StatsIntervalSeconds)
@@ -40,6 +43,15 @@ func TestSetDefaults(t *testing.T) {
 	c3.Database.Provider = "REMOTE"
 	setDefaults(c3)
 	assert.Equal(t, "remote", c3.Database.Provider)
+}
+
+func TestCreativeRepliesContextOnlyCurrentTopic_DefaultsOn(t *testing.T) {
+	var config CreativeRepliesConfig
+	assert.True(t, config.IsContextOnlyCurrentTopic())
+
+	disabled := false
+	config.ContextOnlyCurrentTopic = &disabled
+	assert.False(t, config.IsContextOnlyCurrentTopic())
 }
 
 // --- config_reflect.go --------------------------------------------------------

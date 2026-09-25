@@ -3,6 +3,7 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -33,10 +34,7 @@ func (b *Bot) generateMessageSummary(message *tgbotapi.Message) {
 		return
 	}
 
-	messageText := message.Text
-	if messageText == "" {
-		messageText = message.Caption
-	}
+	messageText := message.TextWithEntityLinks()
 
 	if messageText == "" || utf8.RuneCountInString(messageText) <= b.config.AI.MessageSummaries.MinLength {
 		return
@@ -96,6 +94,7 @@ func (b *Bot) generateMessageSummary(message *tgbotapi.Message) {
 // generateCreativeReplyWithQuote generates a creative reply with optional quoted text context.
 func (b *Bot) generateCreativeReplyWithQuote(messageText string, quotedText string, messageID int, userID int64, chatID int64, replyToText *string) (string, error) {
 	context := b.buildCreativeReplyContext(messageText, messageID, userID, chatID, replyToText)
+	reputationGrade, reputationScore := b.reputationPromptValues(userID, chatID)
 
 	var userPromptText string
 	if quotedText != "" {
@@ -105,11 +104,13 @@ func (b *Bot) generateCreativeReplyWithQuote(messageText string, quotedText stri
 	}
 
 	replacements := map[string]string{
-		"message":         messageText,
-		"context":         context,
-		"quote":           quotedText,
-		"user_profile":    b.getUserProfileForModeration(userID, chatID),
-		"user_reputation": b.getUserReputationForModeration(userID),
+		"message":          messageText,
+		"context":          context,
+		"quote":            quotedText,
+		"user_profile":     b.getUserProfileForModeration(userID, chatID),
+		"user_reputation":  b.getUserReputationForModeration(userID, chatID),
+		"reputation_score": reputationScore,
+		"reputation_grade": reputationGrade,
 	}
 
 	systemPrompt := applyReplacements(b.config.AI.CreativeReplies.Prompt.System, replacements)
@@ -120,6 +121,36 @@ func (b *Bot) generateCreativeReplyWithQuote(messageText string, quotedText stri
 
 	b.dumpPromptToLog("creative_reply", systemPrompt, prompt)
 
+	models := b.config.AI.LightModel
+	if b.config.AI.CreativeReplies.UseFullModel {
+		models = b.config.AI.FullModel
+	}
+	if b.config.AI.CreativeReplies.MessageToolsEnabled {
+		scope := b.creativeMessageToolScope(messageID, chatID)
+		if scope.TopicOnly && !scope.TopicResolved {
+			log.Printf("Creative-reply message tools skipped: current topic could not be resolved")
+		} else if result, err := b.callCreativeReplyWithMessageTools(prompt, systemPrompt, models, scope); err == nil {
+			return result, nil
+		} else {
+			var contentFilterErr *ContentFilterError
+			if errors.As(err, &contentFilterErr) {
+				return "", err
+			}
+			log.Printf("Creative-reply message tools unavailable, continuing without local tools: %v", err)
+		}
+	}
+	if b.config.AI.CreativeReplies.WebSearchEnabled {
+		if result, err := b.callCreativeReplyWithWebSearch(prompt, systemPrompt, models); err == nil {
+			return result, nil
+		} else {
+			var contentFilterErr *ContentFilterError
+			if errors.As(err, &contentFilterErr) {
+				return "", err
+			}
+			log.Printf("Creative-reply web search unavailable, falling back to Chat Completions: %v", err)
+		}
+	}
+
 	if b.config.AI.CreativeReplies.UseFullModel {
 		return b.callAzureOpenAINoFallback("creative_reply", prompt, systemPrompt)
 	}
@@ -129,6 +160,16 @@ func (b *Bot) generateCreativeReplyWithQuote(messageText string, quotedText stri
 // buildCreativeReplyContext builds context for creative replies using reply chains or recent messages.
 func (b *Bot) buildCreativeReplyContext(messageText string, messageID int, userID int64, chatID int64, replyToText *string) string {
 	var contextBuilder strings.Builder
+	var topicID *int
+	if b.config.AI.CreativeReplies.IsContextOnlyCurrentTopic() {
+		messageInfo, err := b.db.GetMessageInfo(messageID, chatID)
+		if err != nil || messageInfo == nil {
+			log.Printf("Cannot resolve topic for creative-reply context from message %d: %v", messageID, err)
+			return ""
+		}
+		currentTopicID := messageInfo.MessageThreadID
+		topicID = &currentTopicID
+	}
 
 	var chainEntries []database.MessageInfo
 	if replyToText != nil && *replyToText != "" {
@@ -137,7 +178,7 @@ func (b *Bot) buildCreativeReplyContext(messageText string, messageID int, userI
 			depth = 5
 		}
 		var replyChain []string
-		replyChain, chainEntries = b.buildReplyChainFromMessageID(messageID, chatID, depth)
+		replyChain, chainEntries = b.buildReplyChainFromMessageID(messageID, chatID, topicID, depth)
 
 		if len(replyChain) > 1 {
 			contextBuilder.WriteString(i18n.T("ai.context_reply_chain"))
@@ -147,14 +188,20 @@ func (b *Bot) buildCreativeReplyContext(messageText string, messageID int, userI
 		}
 	}
 
-	if adjacent := b.buildAdjacentParticipantMessages(chainEntries, chatID); len(adjacent) > 0 {
+	if adjacent := b.buildAdjacentParticipantMessages(chainEntries, chatID, topicID); len(adjacent) > 0 {
 		contextBuilder.WriteString(i18n.T("ai.context_adjacent_messages"))
 		for i, msg := range adjacent {
 			contextBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, msg))
 		}
 	}
 
-	recentMessages, err := b.db.GetRecentMessagesWithUsernames(chatID, 3, 0)
+	var recentMessages []string
+	var err error
+	if topicID != nil {
+		recentMessages, err = b.db.GetRecentMessagesWithUsernamesInTopic(chatID, *topicID, 3, 0)
+	} else {
+		recentMessages, err = b.db.GetRecentMessagesWithUsernames(chatID, 3, 0)
+	}
 	if err == nil && len(recentMessages) > 0 {
 		contextBuilder.WriteString(i18n.T("ai.context_recent_messages"))
 		start := 0
@@ -170,7 +217,12 @@ func (b *Bot) buildCreativeReplyContext(messageText string, messageID int, userI
 		}
 	}
 
-	userMessages, err := b.db.GetRecentUserMessages(userID, chatID, 5, 3)
+	var userMessages []string
+	if topicID != nil {
+		userMessages, err = b.db.GetRecentUserMessagesInTopic(userID, chatID, *topicID, 5, 3)
+	} else {
+		userMessages, err = b.db.GetRecentUserMessages(userID, chatID, 5, 3)
+	}
 	if err == nil && len(userMessages) > 1 {
 		contextBuilder.WriteString(i18n.T("ai.context_user_messages"))
 		for i, msg := range userMessages {
@@ -183,7 +235,7 @@ func (b *Bot) buildCreativeReplyContext(messageText string, messageID int, userI
 
 // buildReplyChainFromMessageID builds a chain of reply messages starting from a specific message ID.
 // Returns the formatted strings (oldest to newest) and the corresponding raw message entries.
-func (b *Bot) buildReplyChainFromMessageID(messageID int, chatID int64, maxMessages int) ([]string, []database.MessageInfo) {
+func (b *Bot) buildReplyChainFromMessageID(messageID int, chatID int64, topicID *int, maxMessages int) ([]string, []database.MessageInfo) {
 	var chain []string
 	var entries []database.MessageInfo
 	currentMessageID := &messageID
@@ -211,6 +263,10 @@ func (b *Bot) buildReplyChainFromMessageID(messageID int, chatID int64, maxMessa
 
 			log.Printf("Found previous message %d as fallback", prevMessageID)
 		}
+		if topicID != nil && messageInfo.MessageThreadID != *topicID {
+			log.Printf("Stopping reply chain at message %d from topic %d (current topic: %d)", messageInfo.MessageID, messageInfo.MessageThreadID, *topicID)
+			break
+		}
 
 		isFromBot := messageInfo.UserID == botUserID
 
@@ -236,7 +292,7 @@ func (b *Bot) buildReplyChainFromMessageID(messageID int, chatID int64, maxMessa
 					if q := strings.TrimSpace(messageInfo.QuoteText); q != "" {
 						messageText = i18n.Tf("ai.reply_to", "", q, messageText)
 						lastShownReplyTo = messageInfo.ReplyToMessageID
-					} else if replyTarget, err := b.db.GetMessageInfo(*messageInfo.ReplyToMessageID, chatID); err == nil {
+					} else if replyTarget, err := b.db.GetMessageInfo(*messageInfo.ReplyToMessageID, chatID); err == nil && (topicID == nil || replyTarget.MessageThreadID == *topicID) {
 						replyContent := formatReplyContextContent(replyTarget.Text, replyTarget.ExtraInfo)
 						if replyContent != "" {
 							replyTargetIsOld := replyTarget.Timestamp.Before(ageCutoff)
@@ -321,7 +377,7 @@ func (b *Bot) moderationMarksForMessage(chatID int64, messageID int) string {
 // buildAdjacentParticipantMessages returns formatted messages from chain participants
 // that lie within a configurable message-ID window around the chain entries, excluding
 // the chain itself and the bot.
-func (b *Bot) buildAdjacentParticipantMessages(chain []database.MessageInfo, chatID int64) []string {
+func (b *Bot) buildAdjacentParticipantMessages(chain []database.MessageInfo, chatID int64, topicID *int) []string {
 	window := b.config.AI.CreativeReplies.ReplyChainAdjacentWindow
 	if window <= 0 || len(chain) == 0 {
 		return nil
@@ -367,7 +423,13 @@ func (b *Bot) buildAdjacentParticipantMessages(chain []database.MessageInfo, cha
 		limit = 50
 	}
 
-	adjacent, err := b.db.GetMessagesByUsersInRange(chatID, userIDs, minID-window, maxID+window, excludeIDs, since, limit)
+	var adjacent []database.MessageInfo
+	var err error
+	if topicID != nil {
+		adjacent, err = b.db.GetMessagesByUsersInRangeInTopic(chatID, *topicID, userIDs, minID-window, maxID+window, excludeIDs, since, limit)
+	} else {
+		adjacent, err = b.db.GetMessagesByUsersInRange(chatID, userIDs, minID-window, maxID+window, excludeIDs, since, limit)
+	}
 	if err != nil {
 		log.Printf("Error fetching adjacent participant messages: %v", err)
 		return nil
@@ -656,10 +718,7 @@ func (b *Bot) extractAndStoreLinksContent(message *tgbotapi.Message) bool {
 
 	defer b.maybeForceGC()
 
-	messageText := message.Text
-	if messageText == "" {
-		messageText = message.Caption
-	}
+	messageText := message.TextWithEntityLinks()
 
 	if messageText == "" {
 		return false

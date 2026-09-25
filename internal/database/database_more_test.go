@@ -379,6 +379,61 @@ func TestGetRecentMessagesForUI(t *testing.T) {
 	assert.True(t, found)
 }
 
+func TestSearchMessagesForAI(t *testing.T) {
+	db := newTestDB(t)
+	base := time.Date(2026, 9, 9, 10, 0, 0, 0, time.UTC)
+	store := func(messageID int, chatID, userID int64, username, text string, topicID int, timestamp time.Time) {
+		require.NoError(t, db.StoreMessageInfo(&MessageInfo{
+			MessageID: messageID, ChatID: chatID, UserID: userID, Username: username,
+			Text: text, MessageThreadID: topicID, Timestamp: timestamp,
+		}))
+	}
+	store(1, -100, 7, "alice", "literal 100% match", 42, base)
+	store(2, -100, 8, "bob", "another MATCH", 42, base.Add(time.Minute))
+	store(3, -100, 7, "alice", "outside topic match", 99, base.Add(2*time.Minute))
+	store(4, -200, 7, "alice", "outside chat match", 42, base.Add(3*time.Minute))
+	_, err := db.RecordIncomingMessage(&MessageInfo{
+		MessageID: 1, ChatID: -100, UserID: 7, Username: "@Alice", Text: "literal 100% match",
+		MessageThreadID: 42, Timestamp: base,
+	}, IncomingMessageOpts{
+		TrackProfile: true, Username: "alice", DisplayName: "Alice Wonderland", DayDate: base.Format("2006-01-02"),
+	})
+	require.NoError(t, err)
+
+	topicID := 42
+	userID := int64(7)
+	from := base.Add(-time.Second)
+	to := base.Add(90 * time.Second)
+	messages, total, err := db.SearchMessagesForAI(AIMessageSearchOptions{
+		ChatID: -100, TopicID: &topicID, UserID: &userID, TextContains: "100%",
+		From: &from, To: &to, Limit: 100, Offset: 0,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, messages, 1)
+	assert.Equal(t, 1, messages[0].MessageID)
+
+	messages, total, err = db.SearchMessagesForAI(AIMessageSearchOptions{
+		ChatID: -100, TopicID: &topicID, TextContains: "match", Limit: 1, Offset: 1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	require.Len(t, messages, 1)
+	assert.Equal(t, 1, messages[0].MessageID, "offset follows newest-first order")
+
+	for _, userName := range []string{"@ALICE", "Alice Wonderland"} {
+		messages, total, err = db.SearchMessagesForAI(AIMessageSearchOptions{
+			ChatID: -100, UserName: userName, Limit: 10,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, total, "lookup %q", userName)
+		assert.Len(t, messages, 2, "lookup %q", userName)
+	}
+
+	_, _, err = db.SearchMessagesForAI(AIMessageSearchOptions{Limit: 10})
+	require.Error(t, err, "AI searches must never default to all chats")
+}
+
 func TestGetAdminNameForMute(t *testing.T) {
 	db := newTestDB(t)
 	logAct(t, db, 5, -1, "mute", 0, time.Now())
@@ -553,10 +608,25 @@ func TestComposeReplyContext(t *testing.T) {
 
 func TestGetTableStatsAndMuteCount(t *testing.T) {
 	db := newTestDB(t)
+	require.NoError(t, db.UpsertReputationEvent(ReputationEvent{
+		SourceKey: "stats-event", UserID: 1, ChatID: -1,
+		Kind: "warning", Component: ReputationComponentModeration, Value: 1,
+	}))
+	_, err := db.RecordCleanReputationMessage(1, -1, 2, 10, time.Now())
+	require.NoError(t, err)
+	_, err = db.conn.Exec(`CREATE TABLE diagnostic_extra (id INTEGER)`)
+	require.NoError(t, err)
+	_, err = db.conn.Exec(`INSERT INTO diagnostic_extra (id) VALUES (1), (2)`)
+	require.NoError(t, err)
+
 	stats, err := db.GetTableStats()
 	require.NoError(t, err)
 	assert.Contains(t, stats, "message_info")
 	assert.Contains(t, stats, "actions")
+	assert.Equal(t, int64(1), stats["reputation_events"])
+	assert.Contains(t, stats, "reputation_clean_state")
+	assert.Equal(t, int64(2), stats["diagnostic_extra"])
+	assert.NotContains(t, stats, "sqlite_sequence")
 
 	require.NoError(t, db.AddMutedUser(&MutedUser{
 		UserID: 1, ChatID: -1, MutedBy: 2, MutedAt: time.Now(),
@@ -819,6 +889,34 @@ func TestDeleteUserProfile(t *testing.T) {
 	got, err := db.GetUserProfile(5)
 	require.NoError(t, err)
 	assert.Nil(t, got)
+}
+
+func TestGetPreviousMessagesForUsers(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	chats := []int64{-1}
+	since := now.Add(-time.Hour)
+
+	// Three older messages plus one inside the current window.
+	storeMsg(t, db, 1, -1, 5, "alice", "oldest", now.Add(-72*time.Hour))
+	storeMsg(t, db, 2, -1, 5, "alice", "older", now.Add(-48*time.Hour))
+	storeMsg(t, db, 3, -1, 5, "alice", "old", now.Add(-24*time.Hour))
+	storeMsg(t, db, 4, -1, 5, "alice", "recent", now)
+
+	// Only the 2 most recent messages before `since`, in chronological order.
+	got, err := db.GetPreviousMessagesForUsers(chats, since, 2)
+	require.NoError(t, err)
+	require.Len(t, got[5], 2)
+	assert.Equal(t, "older", got[5][0].Text)
+	assert.Equal(t, "old", got[5][1].Text)
+
+	// Empty chats / non-positive limit -> nil.
+	none, err := db.GetPreviousMessagesForUsers(nil, since, 2)
+	require.NoError(t, err)
+	assert.Nil(t, none)
+	none, err = db.GetPreviousMessagesForUsers(chats, since, 0)
+	require.NoError(t, err)
+	assert.Nil(t, none)
 }
 
 func TestGetMessageModerationMarks(t *testing.T) {

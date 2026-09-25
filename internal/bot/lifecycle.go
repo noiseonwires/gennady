@@ -353,11 +353,11 @@ func (b *Bot) startWebhookMode() {
 		var resp *http.Response
 		var reqErr error
 
-		// When reaction tracking is enabled, opt in to reaction updates (not in
-		// the default set). Setting allowed_updates means we must list every kind
-		// we want to keep receiving.
+		// AI context tracking and event-based reputation both need reaction
+		// updates, which are not part of Telegram's default set.
 		allowedUpdates := ""
-		if b.config.AI.Enabled && b.config.AI.TrackReactions {
+		reputationTracksReactions := b.config.Reputation.Enabled == nil || *b.config.Reputation.Enabled
+		if (b.config.AI.Enabled && b.config.AI.TrackReactions) || reputationTracksReactions {
 			allowedUpdates = `["message","edited_message","channel_post","edited_channel_post","callback_query","message_reaction","message_reaction_count"]`
 		}
 

@@ -118,6 +118,25 @@ func TestNightModeDefault(t *testing.T) {
 	c := &Config{}
 	setDefaults(c)
 	assert.Equal(t, 5, c.NightMode.ReplyDeleteSeconds)
+	require.NotNil(t, c.NightMode.ReputationExemption.Enabled)
+	assert.True(t, *c.NightMode.ReputationExemption.Enabled)
+	assert.Equal(t, "both", c.NightMode.ReputationExemption.Source)
+	assert.Equal(t, "neutral", c.NightMode.ReputationExemption.MinimumGrade)
+}
+
+func TestValidateNightModeReputationExemption(t *testing.T) {
+	c := &Config{}
+	c.Moderation.ChatIDs = ChatIDList{IDs: []int64{-100}}
+	c.NightMode = NightModeConfig{
+		Enabled: true, StartTime: "23:00", EndTime: "08:00",
+		ReputationExemption: NightModeReputationExemptionConfig{
+			Enabled: boolPtr(true), Source: "unknown", MinimumGrade: "excellent",
+		},
+	}
+	err := c.validateNightMode()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reputation_exemption.source")
+	assert.Contains(t, err.Error(), "reputation_exemption.minimum_grade")
 }
 
 func TestNightModeWindowEnd(t *testing.T) {

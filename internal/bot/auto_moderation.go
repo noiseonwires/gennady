@@ -45,12 +45,13 @@ func (b *Bot) botActionContext(message *tgbotapi.Message) *webModContext {
 		botName = i18n.T("automod.bot_actor")
 	}
 	return &webModContext{
-		userID:    userID,
-		chatID:    message.Chat.ID,
-		messageID: message.MessageID,
-		username:  username,
-		adminID:   botID,
-		adminName: botName,
+		userID:             userID,
+		chatID:             message.Chat.ID,
+		messageID:          message.MessageID,
+		username:           username,
+		adminID:            botID,
+		adminName:          botName,
+		suppressReputation: true,
 	}
 }
 
@@ -68,7 +69,10 @@ func describeRuleTrigger(rule *config.ModerationRule) string {
 
 // notifyAutoAction posts a notice to the admin chat about an automatic action
 // the bot just performed, unless the rule opted out via notify_admin: false.
-func (b *Bot) notifyAutoAction(rule *config.ModerationRule, text string) {
+func (b *Bot) notifyAutoAction(rule *config.ModerationRule, text string, adminNotificationAllowed bool) {
+	if !adminNotificationAllowed {
+		return
+	}
 	if rule != nil && !rule.IsNotifyAdmin() {
 		return
 	}
@@ -106,7 +110,10 @@ type chainAction struct {
 // They are summarised in the report body and used to set the card flags so
 // admins see e.g. a "Restore" button when the chain also includes a delete.
 // decisionDetails contains the AI's reasoning (lines after the trigger line).
-func (b *Bot) autoModerateReport(message *tgbotapi.Message, messageText string, isContentFilter bool, rule *config.ModerationRule, otherActions []chainAction, decisionDetails string) {
+func (b *Bot) autoModerateReport(message *tgbotapi.Message, messageText string, isContentFilter bool, rule *config.ModerationRule, otherActions []chainAction, decisionDetails string, adminNotificationAllowed bool) {
+	if !adminNotificationAllowed {
+		return
+	}
 	// notify_admin is a no-op for the report action: the admin card IS the
 	// admin notification, so it's always sent regardless of the rule's
 	// notify_admin value. notify_admin only suppresses the auxiliary
@@ -163,16 +170,17 @@ func (b *Bot) autoModerateReport(message *tgbotapi.Message, messageText string, 
 // autoModerateDelete deletes the offending message immediately and either logs
 // the action (admin = bot) or, on failure, falls back to a report with a
 // "restore" button so the admin can recover.
-func (b *Bot) autoModerateDelete(message *tgbotapi.Message, messageText string, isContentFilter bool, rule *config.ModerationRule) {
+func (b *Bot) autoModerateDelete(message *tgbotapi.Message, messageText string, isContentFilter bool, rule *config.ModerationRule, adminNotificationAllowed bool) {
 	if err := b.deleteMessageWithRetry(message.Chat.ID, message.MessageID); err != nil {
 		log.Printf("Auto-moderation (delete): failed to delete message %d in chat %d: %v",
 			message.MessageID, message.Chat.ID, err)
 		// Fall back to a report so the admin can take action manually.
-		b.autoModerateReport(message, messageText, isContentFilter, rule, nil, "")
+		b.autoModerateReport(message, messageText, isContentFilter, rule, nil, "", adminNotificationAllowed)
 		return
 	}
 	log.Printf("Auto-moderation (delete): removed message %d in chat %d (%s)",
 		message.MessageID, message.Chat.ID, describeRuleTrigger(rule))
+	b.deleteAlbumSiblings(message.Chat.ID, message.MessageID)
 
 	ctx := b.botActionContext(message)
 	reason := i18n.T("automod.reason_delete")
@@ -181,7 +189,7 @@ func (b *Bot) autoModerateDelete(message *tgbotapi.Message, messageText string, 
 	}
 	b.logAction(ctx, "delete", reason, 0)
 
-	b.notifyAutoAction(rule, i18n.Tf("automod.notify_delete", ctx.username, describeRuleTrigger(rule)))
+	b.notifyAutoAction(rule, i18n.Tf("automod.notify_delete", ctx.username, describeRuleTrigger(rule)), adminNotificationAllowed)
 }
 
 // ── ACTION: warn ────────────────────────────────────────────────────────────
@@ -189,7 +197,7 @@ func (b *Bot) autoModerateDelete(message *tgbotapi.Message, messageText string, 
 // autoModerateWarn issues a warning to the user (mirroring handleWarningAction
 // but with the bot acting as the moderator). The original message is kept;
 // only a warning reply is sent.
-func (b *Bot) autoModerateWarn(message *tgbotapi.Message, messageText string, rule *config.ModerationRule) {
+func (b *Bot) autoModerateWarn(message *tgbotapi.Message, messageText string, rule *config.ModerationRule, adminNotificationAllowed bool) {
 	if message.From == nil {
 		log.Printf("Auto-moderation (warn): cannot warn anonymous message %d", message.MessageID)
 		return
@@ -234,16 +242,11 @@ func (b *Bot) autoModerateWarn(message *tgbotapi.Message, messageText string, ru
 			muteInfoText = strings.ReplaceAll(b.config.AI.WarningMute, "{{muted_for}}", mutedFor)
 		}
 	}
-	reputation := ""
-	if profile, perr := b.db.GetUserProfile(ctx.userID); perr == nil && profile != nil {
-		reputation = profile.Reputation
-	}
-
 	displayName := b.getUserDisplayName(ctx.userID)
-	warningText, werr := b.generateWarningNotification(displayName, messageText, muteInfoText, reputation, ctx.chatID)
+	warningText, werr := b.generateWarningNotification(displayName, messageText, muteInfoText, ctx.userID, ctx.chatID)
 	if werr != nil {
 		if strings.Contains(werr.Error(), "content_filter") && messageText != "" {
-			warningText, werr = b.generateWarningNotification(displayName, "", muteInfoText, reputation, ctx.chatID)
+			warningText, werr = b.generateWarningNotification(displayName, "", muteInfoText, ctx.userID, ctx.chatID)
 		}
 		if werr != nil {
 			warningText = i18n.T("warn.fallback")
@@ -272,7 +275,7 @@ func (b *Bot) autoModerateWarn(message *tgbotapi.Message, messageText string, ru
 	b.logAction(ctx, "warn", i18n.T("warn.reason"), 0)
 
 	link := messageLinkFromMessage(message)
-	b.notifyAutoAction(rule, i18n.Tf("automod.notify_warn", displayName, describeRuleTrigger(rule), link))
+	b.notifyAutoAction(rule, i18n.Tf("automod.notify_warn", displayName, describeRuleTrigger(rule), link), adminNotificationAllowed)
 }
 
 // ── ACTION: mute ───────────────────────────────────────────
@@ -281,7 +284,7 @@ func (b *Bot) autoModerateWarn(message *tgbotapi.Message, messageText string, ru
 // (0 = effectively forever). The original message is preserved; only the user
 // is silenced. On Telegram failure we roll back the DB record and fall back to
 // a report so admins can act manually.
-func (b *Bot) autoModerateMute(message *tgbotapi.Message, messageText string, rule *config.ModerationRule) {
+func (b *Bot) autoModerateMute(message *tgbotapi.Message, messageText string, rule *config.ModerationRule, adminNotificationAllowed bool) {
 	if message.From == nil {
 		log.Printf("Auto-moderation (mute): cannot mute anonymous message %d", message.MessageID)
 		return
@@ -321,7 +324,7 @@ func (b *Bot) autoModerateMute(message *tgbotapi.Message, messageText string, ru
 	}
 	if err := b.db.AddMutedUserSafely(mutedUser); err != nil {
 		log.Printf("Auto-moderation (mute): error storing mute record: %v", err)
-		b.autoModerateReport(message, messageText, false, rule, nil, "")
+		b.autoModerateReport(message, messageText, false, rule, nil, "", adminNotificationAllowed)
 		return
 	}
 
@@ -330,7 +333,7 @@ func (b *Bot) autoModerateMute(message *tgbotapi.Message, messageText string, ru
 		if unmuteErr := b.db.UnmuteUser(ctx.userID, ctx.chatID); unmuteErr != nil {
 			log.Printf("Auto-moderation (mute): error rolling back mute record: %v", unmuteErr)
 		}
-		b.autoModerateReport(message, messageText, false, rule, nil, "")
+		b.autoModerateReport(message, messageText, false, rule, nil, "", adminNotificationAllowed)
 		return
 	}
 
@@ -347,5 +350,5 @@ func (b *Bot) autoModerateMute(message *tgbotapi.Message, messageText string, ru
 	}
 
 	link := messageLinkFromMessage(message)
-	b.notifyAutoAction(rule, i18n.Tf("automod.notify_mute", ctx.username, duration, describeRuleTrigger(rule), link))
+	b.notifyAutoAction(rule, i18n.Tf("automod.notify_mute", ctx.username, duration, describeRuleTrigger(rule), link), adminNotificationAllowed)
 }

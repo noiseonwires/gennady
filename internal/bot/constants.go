@@ -39,3 +39,14 @@ const (
 	ForeverMuteDuration           = 100 * 365 * 24 * time.Hour
 	ForeverMuteDetectionThreshold = 10 * 365 * 24 * time.Hour
 )
+
+// User-profile generation.
+const (
+	// PreviousDaysMessagesPlaceholder is the profile-prompt placeholder that
+	// expands to the user's messages from before the current analysis window.
+	PreviousDaysMessagesPlaceholder = "previous_days_messages"
+
+	// DefaultPreviousDaysMessages is how many of those older messages are
+	// included when ai.user_profiles.previous_days_messages_count is unset.
+	DefaultPreviousDaysMessages = 10
+)

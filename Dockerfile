@@ -1,9 +1,9 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27.0
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2025 Kirill aka Noiseonwires
 
 # Pin to a patch version for reproducibility (adjust as needed)
-ARG GO_VERSION=1.26.3
+ARG GO_VERSION=1.27.1
 
 # Builder stage runs on the build platform (host)
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
@@ -20,7 +20,7 @@ ARG VERSION=dev
 
 # Pinned tdewolff/minify CLI version used to shrink the embedded Web UI assets.
 # Requires Go >= 1.25 (satisfied by GO_VERSION above).
-ARG MINIFY_VERSION=v2.24.13
+ARG MINIFY_VERSION=v2.24.17
 
 # Debug: Show build arguments
 RUN echo "Build arguments:" && \

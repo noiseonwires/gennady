@@ -348,10 +348,11 @@ func (b *Bot) processMessageEnhancements(message *tgbotapi.Message) (string, boo
 		messageText = message.Caption
 	}
 
+	aiImageEnabled := b.config.AI.Enabled && b.config.AI.ContentModeration.AIImageAnalysisEnabled
 	visionEnabled := b.config.AI.ContentModeration.VisionEnabled
 	ocrSpaceEnabled := b.config.AI.ContentModeration.OCRSpaceEnabled
 	contentSafetyFlagged := false
-	if (visionEnabled || ocrSpaceEnabled) && message.Photo != nil && len(message.Photo) > 0 {
+	if (aiImageEnabled || visionEnabled || ocrSpaceEnabled) && message.Photo != nil && len(message.Photo) > 0 {
 		photo := message.Photo[len(message.Photo)-1]
 
 		log.Printf("Processing image in message %d (file_id: %s)", message.MessageID, photo.FileID)
@@ -360,23 +361,10 @@ func (b *Bot) processMessageEnhancements(message *tgbotapi.Message) (string, boo
 		if err != nil {
 			log.Printf("Error downloading image: %v", err)
 		} else {
-			var imageAnalysis string
-			var analysisErr error
-
-			if visionEnabled {
-				imageAnalysis, contentSafetyFlagged, analysisErr = b.analyzeImageWithVision(imageData)
-				if analysisErr != nil {
-					log.Printf("Error analyzing image with Vision API: %v", analysisErr)
-				}
-			}
-
-			// Fallback order: Azure Vision → OCR.space.
-			if (analysisErr != nil || !visionEnabled) && ocrSpaceEnabled && imageAnalysis == "" {
-				log.Printf("Falling back to OCR.space for image analysis")
-				imageAnalysis, analysisErr = b.analyzeImageWithOCRSpace(imageData)
-				if analysisErr != nil {
-					log.Printf("Error analyzing image with OCR.space: %v", analysisErr)
-				}
+			imageAnalysis, flagged, analysisErr := b.describeImageWithFallback(imageData)
+			contentSafetyFlagged = flagged
+			if analysisErr != nil {
+				log.Printf("Error analyzing image: %v", analysisErr)
 			}
 
 			if analysisErr == nil && imageAnalysis != "" {
@@ -450,7 +438,7 @@ func (b *Bot) storeBotMessageInfo(message *telegram.Message) {
 		Text:             message.Text,
 		ReplyToMessageID: replyToMessageID,
 		MessageThreadID:  messageTopic(message),
-		Timestamp:        time.Now(),
+		Timestamp:        messageTimestamp(message),
 	}
 
 	err := b.db.StoreMessageInfo(messageInfo)
@@ -470,6 +458,7 @@ func neutralInboundMessage(m *tgbotapi.Message) *telegram.Message {
 		MessageID: m.MessageID,
 		Text:      m.Text,
 		Chat:      telegram.Chat{ID: m.Chat.ID},
+		Date:      m.Date,
 	}
 	if m.ReplyToMessage != nil {
 		out.ReplyToMessageID = m.ReplyToMessage.MessageID

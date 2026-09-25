@@ -3,6 +3,7 @@
 package bot
 
 import (
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -20,11 +21,48 @@ func TestExtractReputation(t *testing.T) {
 	assert.Equal(t, "good", extractReputation("Nice user.\nReputation: good"))
 	assert.Equal(t, "bad", extractReputation("Toxic.\nReputation: bad"))
 	assert.Equal(t, "neutral", extractReputation("Ordinary.\nReputation: neutral"))
+	// Extreme grades.
+	assert.Equal(t, "very_good", extractReputation("Outstanding.\nReputation: very_good"))
+	assert.Equal(t, "very_bad", extractReputation("Awful.\nReputation: very bad"))
+	assert.Equal(t, "very_good", extractReputation("Great.\nReputation: Very Good"))
 	// Russian markers.
 	assert.Equal(t, "good", extractReputation("Хороший.\nРепутация: хороший"))
 	assert.Equal(t, "bad", extractReputation("Плохой.\nРепутация: плохой"))
+	assert.Equal(t, "very_bad", extractReputation("Ужасный.\nРепутация: очень плохой"))
+	assert.Equal(t, "very_good", extractReputation("Отличный.\nРепутация: очень хороший"))
+	// A trailing justification must not flip the verdict.
+	assert.Equal(t, "bad", extractReputation("Reputation: bad - not a good fit for the chat"))
 	// No marker -> neutral.
 	assert.Equal(t, "neutral", extractReputation("just some text"))
+}
+
+// --- previous-days messages ---------------------------------------------------
+
+func TestBuildPreviousMessagesDigest(t *testing.T) {
+	assert.Empty(t, buildPreviousMessagesDigest(nil))
+
+	digest := buildPreviousMessagesDigest([]database.MessageInfo{
+		{MessageID: 1, UserID: 7, Text: "older one", Timestamp: time.Now().Add(-48 * time.Hour)},
+		{MessageID: 2, UserID: 7, Text: "older two", Timestamp: time.Now().Add(-30 * time.Hour)},
+	})
+	assert.Contains(t, digest, "older one")
+	assert.Contains(t, digest, "older two")
+}
+
+func TestPreviousDaysMessagesCount(t *testing.T) {
+	b, _ := newMockBot(t)
+
+	// Placeholder unused -> feature off, no DB work.
+	b.config.AI.UserProfiles.Prompt = config.PromptPair{System: "s", User: "u {{messages}}"}
+	assert.Equal(t, 0, b.previousDaysMessagesCount())
+
+	// Placeholder used -> default count.
+	b.config.AI.UserProfiles.Prompt.User = "u {{messages}} {{previous_days_messages}}"
+	assert.Equal(t, DefaultPreviousDaysMessages, b.previousDaysMessagesCount())
+
+	// Explicit count wins.
+	b.config.AI.UserProfiles.PreviousDaysMessagesCount = 3
+	assert.Equal(t, 3, b.previousDaysMessagesCount())
 }
 
 // --- buildMessageDigest (pure) ------------------------------------------------
@@ -87,30 +125,35 @@ func TestGenerateCreativeReplyWithQuote_LightModel(t *testing.T) {
 // --- user profile generation (via transport) ----------------------------------
 
 func TestGenerateUserProfileWithAI(t *testing.T) {
+	var gotUserPrompt string
 	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotUserPrompt = string(body)
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"A helpful user.\nReputation: good"}}]}`))
 	})
 	b.config.AI.LightModel = fullModelConfigs()
 	b.config.AI.UserProfiles.Prompt = config.PromptPair{
 		System: "analyze {{username}}",
-		User:   "messages: {{messages}}",
+		User:   "messages: {{messages}} earlier: {{previous_days_messages}}",
 	}
 
-	out, err := b.generateUserProfileWithAI("digest text", "alice")
+	out, err := b.generateUserProfileWithAI("digest text", "earlier digest", "alice")
 	require.NoError(t, err)
 	assert.Contains(t, out, "helpful user")
 	assert.Equal(t, "good", extractReputation(out))
+	assert.Contains(t, gotUserPrompt, "earlier digest")
+	assert.NotContains(t, gotUserPrompt, "{{previous_days_messages}}")
 }
 
 func TestGenerateUserProfileWithAI_Unconfigured(t *testing.T) {
 	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {})
-	_, err := b.generateUserProfileWithAI("digest", "alice")
+	_, err := b.generateUserProfileWithAI("digest", "", "alice")
 	require.Error(t, err)
 }
 
 func TestUpdateUserProfileWithAI(t *testing.T) {
 	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Now toxic.\nReputation: bad"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Now toxic.\nReputation: very bad"}}]}`))
 	})
 	b.config.AI.LightModel = fullModelConfigs()
 	b.config.AI.UserProfiles.UpdatePrompt = config.PromptPair{
@@ -119,9 +162,9 @@ func TestUpdateUserProfileWithAI(t *testing.T) {
 	}
 
 	existing := &database.UserProfile{UserID: 7, Username: "alice", Profile: "Was nice.", Reputation: "good"}
-	out, err := b.updateUserProfileWithAI(existing, "new digest", "alice")
+	out, err := b.updateUserProfileWithAI(existing, "new digest", "", "alice")
 	require.NoError(t, err)
-	assert.Equal(t, "bad", extractReputation(out))
+	assert.Equal(t, "very_bad", extractReputation(out))
 }
 
 func TestGenerateOrUpdateUserProfile_NewProfile(t *testing.T) {
@@ -136,7 +179,7 @@ func TestGenerateOrUpdateUserProfile_NewProfile(t *testing.T) {
 		Username: "alice",
 		Messages: []database.MessageInfo{{MessageID: 1, ChatID: -100, UserID: 7, Text: "hi", Timestamp: time.Now()}},
 	}
-	err := b.generateOrUpdateUserProfile(pd, time.Now().Add(-24*time.Hour))
+	err := b.generateOrUpdateUserProfile(pd, time.Now().Add(-24*time.Hour), nil)
 	require.NoError(t, err)
 
 	// Profile persisted with parsed reputation.
@@ -150,7 +193,7 @@ func TestGenerateOrUpdateUserProfile_NewProfile(t *testing.T) {
 func TestGenerateOrUpdateUserProfile_NoMessages(t *testing.T) {
 	b, _ := newMockBot(t)
 	// No messages -> no-op, no error.
-	err := b.generateOrUpdateUserProfile(&database.ProfileData{UserID: 7}, time.Now())
+	err := b.generateOrUpdateUserProfile(&database.ProfileData{UserID: 7}, time.Now(), nil)
 	require.NoError(t, err)
 }
 

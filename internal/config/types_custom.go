@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // Custom YAML aggregate types. These exist mostly to accept "one or many"
@@ -89,6 +89,12 @@ type AIModelConfig struct {
 	DeploymentName string   `yaml:"deployment_name" json:"deployment_name"`
 	Temperature    *float64 `yaml:"temperature,omitempty" json:"temperature"`
 	OmitMaxTokens  bool     `yaml:"omit_max_tokens" json:"omit_max_tokens"`
+	// UseForImageAnalysis opts this endpoint into the multimodal image-analysis
+	// failover pool. It must only be enabled for models that accept image input.
+	UseForImageAnalysis bool `yaml:"use_for_image_analysis,omitempty" json:"use_for_image_analysis"`
+	// UseForWebSearch opts this endpoint into Responses API web search. It must
+	// only be enabled for models/providers that support the web_search tool.
+	UseForWebSearch bool `yaml:"use_for_web_search,omitempty" json:"use_for_web_search"`
 }
 
 // IsEnabled reports whether this model endpoint may be used. An unset flag

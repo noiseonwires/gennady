@@ -132,6 +132,12 @@ func seedAllBackedUpTables(t *testing.T, db *DB) {
 
 	require.NoError(t, db.RecordTokenUsage("gpt-4o", "moderation", "2026-06-09", 1200, 340))
 	require.NoError(t, db.RecordTokenUsage("gpt-4o-mini", "summary", "2026-06-09", 800, 120))
+	require.NoError(t, db.UpsertReputationEvent(ReputationEvent{
+		SourceKey: "incident:-100:1:11", UserID: 1, ChatID: -100, Kind: "warning",
+		Component: ReputationComponentModeration, Value: 1, Severity: 2, OccurredAt: now,
+	}))
+	_, err = db.RecordCleanReputationMessage(1, -100, 1, 20, now)
+	require.NoError(t, err)
 
 	require.NoError(t, db.SaveWebsiteSnapshot("https://example.com/rules", "rule one", "hash-1"))
 	require.NoError(t, db.SaveWebsiteSnapshot("https://example.com/prices", "price list", "hash-2"))
@@ -154,8 +160,10 @@ var backedUpTables = []struct {
 	{"user_profiles", nil},
 	{"user_names_history", []string{"id"}},
 	{"user_daily_activity", nil},
+	{"reputation_events", nil},
+	{"reputation_clean_state", nil},
 	{"token_usage", nil},
-	{"forum_topics", []string{"updated_at"}}, // updated_at is write-time bookkeeping
+	{"forum_topics", []string{"updated_at"}},                    // updated_at is write-time bookkeeping
 	{"website_snapshots", []string{"changed_at", "checked_at"}}, // write-time bookkeeping
 }
 

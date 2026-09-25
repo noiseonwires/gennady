@@ -35,7 +35,7 @@ import (
 	"reflect"
 	"strconv"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // Load reads configuration from a YAML file, applies environment variable

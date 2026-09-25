@@ -20,6 +20,59 @@ type nightModeKey struct {
 	userID int64
 }
 
+func reputationGradeAtLeast(grade, minimum string) bool {
+	ranks := map[string]int{
+		"very_bad":  0,
+		"bad":       1,
+		"neutral":   2,
+		"good":      3,
+		"very_good": 4,
+	}
+	gradeRank, gradeOK := ranks[strings.ToLower(strings.TrimSpace(grade))]
+	minimumRank, minimumOK := ranks[strings.ToLower(strings.TrimSpace(minimum))]
+	return gradeOK && minimumOK && gradeRank >= minimumRank
+}
+
+// nightModeReputationExempt reports whether the user's configured reputation
+// sources all meet the quiet-hours threshold. In "both" mode, globally disabled
+// systems are ignored; at least one enabled source must be checked.
+func (b *Bot) nightModeReputationExempt(userID, chatID int64) bool {
+	cfg := b.config.NightMode.ReputationExemption
+	if cfg.Enabled == nil || !*cfg.Enabled || userID == 0 {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(cfg.Source))
+	minimum := strings.ToLower(strings.TrimSpace(cfg.MinimumGrade))
+	checked := false
+
+	if source == "score" || source == "both" {
+		if b.reputationEnabled() {
+			checked = true
+			score, err := b.reputationScore(userID, chatID)
+			if err != nil || !reputationGradeAtLeast(score.Grade, minimum) {
+				return false
+			}
+		} else if source == "score" {
+			return false
+		}
+	}
+
+	if source == "ai" || source == "both" {
+		if b.config.AI.UserProfiles.Enabled {
+			checked = true
+			profile := b.lookupCachedUserProfile(userID)
+			if profile == nil || strings.TrimSpace(profile.Profile) == "" ||
+				!reputationGradeAtLeast(profile.Reputation, minimum) {
+				return false
+			}
+		} else if source == "ai" {
+			return false
+		}
+	}
+
+	return checked
+}
+
 // handleNightModeMessage enforces night mode for a single incoming message: it
 // posts a short "quiet hours" notice as a reply, deletes the user's message, and
 // schedules removal of the notice after the configured delay. When muted is set
@@ -145,7 +198,7 @@ func (b *Bot) applyNightModeMute(message *tgbotapi.Message, until time.Time) {
 		MessageID:  message.MessageID,
 		Timestamp:  time.Now(),
 	}
-	if err := b.db.LogAction(action); err != nil {
+	if err := b.logReputationAction(action); err != nil {
 		log.Printf("Night mode: error logging mute action: %v", err)
 	}
 }

@@ -62,7 +62,7 @@ type MsgContext struct {
 	Scope    Scope
 
 	// Enhanced is the message text after the enhancement stage: the raw text
-	// (or caption), optionally enriched with vision/OCR analysis. It is the text
+	// (or caption), optionally enriched with AI/vision/OCR analysis. It is the text
 	// fed to moderation, summaries and length checks.
 	Enhanced string
 	// EnhancedMsg is a shallow copy of Msg whose Text is Enhanced. Downstream
@@ -109,7 +109,7 @@ func (b *Bot) resolveScope(m *tgbotapi.Message) Scope {
 
 // newInboundContext builds the MsgContext for an inbound message, resolving its
 // Scope once. EnhancedMsg defaults to the original message; the enhance stage
-// replaces it with the vision/OCR-enriched copy. Defaulting it here lets the
+// replaces it with the image-analysis-enriched copy. Defaulting it here lets the
 // record/moderate logic operate on mc.EnhancedMsg uniformly, including when a
 // caller (e.g. a test) drives analyzeMessage without running the enhance stage.
 func (b *Bot) newInboundContext(m *tgbotapi.Message, isEdited bool) *MsgContext {

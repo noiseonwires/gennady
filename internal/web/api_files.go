@@ -21,7 +21,7 @@ import (
 	"gennadium/internal/config"
 	"gennadium/internal/database"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // File-management endpoints: download / upload of YAML config, env files and
@@ -51,23 +51,17 @@ func (h *apiHandler) handleRunBackup(w http.ResponseWriter, r *http.Request) {
 	dbPath := h.config.Database.Path
 	config.RUnlock()
 
-	ctx, cancel := context.WithTimeout(r.Context(), manualBackupTimeout)
-	defer cancel()
+	h.startOperation(w, "database_backup", func() (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), manualBackupTimeout)
+		defer cancel()
 
-	res, err := backup.Run(ctx, h.db, cfg, dbPath)
-	if err != nil {
-		log.Printf("WebUI: manual database backup failed: %v", err)
-		writeWebErrf(w, errBackupFailed, "%v", err)
-		return
-	}
+		res, err := backup.Run(ctx, h.db, cfg, dbPath)
+		if err != nil {
+			return "", errBackupFailed.Format("%v", err)
+		}
 
-	log.Printf("WebUI: manual database backup completed: %s (%d bytes) → %s", res.FileName, res.Bytes, res.Destination)
-	jsonResponse(w, map[string]any{
-		"status":      "ok",
-		"file":        res.FileName,
-		"bytes":       res.Bytes,
-		"destination": res.Destination,
-		"message":     fmt.Sprintf("Backup written: %s (%.1f MB) → %s", res.FileName, float64(res.Bytes)/(1024*1024), res.Destination),
+		log.Printf("WebUI: manual database backup completed: %s (%d bytes) → %s", res.FileName, res.Bytes, res.Destination)
+		return fmt.Sprintf("Backup written: %s (%.1f MB) → %s", res.FileName, float64(res.Bytes)/(1024*1024), res.Destination), nil
 	})
 }
 
@@ -382,30 +376,31 @@ func (h *apiHandler) handleCloneRemoteToLocal(w http.ResponseWriter, r *http.Req
 	}
 
 	includeConfig := r.URL.Query().Get("include_config") == "1"
+	h.startOperation(w, "database_clone_to_local", func() (string, error) {
+		return h.cloneRemoteToLocal(includeConfig)
+	})
+}
 
+func (h *apiHandler) cloneRemoteToLocal(includeConfig bool) (string, error) {
 	if h.db.IsLocal() {
-		h.cloneRemoteIntoActiveLocal(w, includeConfig)
-		return
+		return h.cloneRemoteIntoActiveLocal(includeConfig)
 	}
 
 	// Active database is remote: snapshot it into the local file.
 	target := strings.TrimSpace(h.config.Database.Path)
 	if target == "" {
-		writeWebErr(w, errLocalDBPathNotSet)
-		return
+		return "", errLocalDBPathNotSet
 	}
 
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		writeWebErrf(w, errLocalDBPathNotWritable, "%s", writeFileError(dir, err))
-		return
+		return "", errLocalDBPathNotWritable.Format("%s", writeFileError(dir, err))
 	}
 	// Probe writability with a throwaway file so we fail early with a clear
 	// error instead of part-way through the export.
 	probe, err := os.CreateTemp(dir, "moderation_clone_probe_*")
 	if err != nil {
-		writeWebErrf(w, errLocalDBPathNotWritable, "%s", writeFileError(dir, err))
-		return
+		return "", errLocalDBPathNotWritable.Format("%s", writeFileError(dir, err))
 	}
 	probePath := probe.Name()
 	probe.Close()
@@ -413,14 +408,12 @@ func (h *apiHandler) handleCloneRemoteToLocal(w http.ResponseWriter, r *http.Req
 
 	tmpPath, err := h.db.ExportToLocalFile(dir, includeConfig)
 	if err != nil {
-		writeWebErrf(w, errExportDBFailed, "failed to export database: %v", err)
-		return
+		return "", errExportDBFailed.Format("failed to export database: %v", err)
 	}
 
 	if err := os.Rename(tmpPath, target); err != nil {
 		os.Remove(tmpPath)
-		writeWebErrf(w, errExportDBFailed, "failed to write database file: %v", err)
-		return
+		return "", errExportDBFailed.Format("failed to write database file: %v", err)
 	}
 	// Drop any WAL sidecars left by a previous local database at this path; the
 	// freshly exported file is a self-contained snapshot.
@@ -428,47 +421,42 @@ func (h *apiHandler) handleCloneRemoteToLocal(w http.ResponseWriter, r *http.Req
 	os.Remove(target + "-shm")
 
 	log.Printf("WebUI: remote database cloned to local file %s (includeConfig=%v)", target, includeConfig)
-	jsonResponse(w, map[string]string{"status": "ok", "message": fmt.Sprintf("Remote database cloned to local file %s.", target)})
+	return fmt.Sprintf("Remote database cloned to local file %s.", target), nil
 }
 
 // cloneRemoteIntoActiveLocal pulls data from the configured (but not live)
 // remote database and merges it into the live local database. It runs the same
 // post-import steps as a DB upload because the active database changed.
-func (h *apiHandler) cloneRemoteIntoActiveLocal(w http.ResponseWriter, includeConfig bool) {
+func (h *apiHandler) cloneRemoteIntoActiveLocal(includeConfig bool) (string, error) {
 	remote, err := database.OpenRemote(h.remoteCloneConfig())
 	if err != nil {
-		writeWebErrf(w, errCloneRemoteConnectFailed, "%v", err)
-		return
+		return "", errCloneRemoteConnectFailed.Format("%v", err)
 	}
 	defer remote.Close()
 
 	tmpPath, err := remote.ExportToLocalFile(h.cloneTempDir(), includeConfig)
 	if err != nil {
-		writeWebErrf(w, errExportDBFailed, "failed to export remote database: %v", err)
-		return
+		return "", errExportDBFailed.Format("failed to export remote database: %v", err)
 	}
 	defer os.Remove(tmpPath)
 
 	if err := h.db.ImportFromLocalFile(tmpPath, includeConfig); err != nil {
-		writeWebErrf(w, errImportDBFailed, "failed to import database: %v", err)
-		return
+		return "", errImportDBFailed.Format("failed to import database: %v", err)
 	}
 	if includeConfig {
 		if _, err := h.hashStoredWebUIPassword(); err != nil {
-			writeWebErrf(w, errImportDBFailed, "failed to secure imported config: %v", err)
-			return
+			return "", errImportDBFailed.Format("failed to secure imported config: %v", err)
 		}
 		if h.configFromDB {
 			if err := h.reloadConfigFromDB(); err != nil {
-				writeWebErrf(w, errImportDBFailed, "failed to reload imported config: %v", err)
-				return
+				return "", errImportDBFailed.Format("failed to reload imported config: %v", err)
 			}
 		}
 	}
 
 	h.db.InvalidateMuteCache()
 	log.Printf("WebUI: configured remote database cloned into live local database (includeConfig=%v)", includeConfig)
-	jsonResponse(w, map[string]string{"status": "ok", "message": "Remote database cloned into the live local database."})
+	return "Remote database cloned into the live local database.", nil
 }
 
 // handleCloneLocalToRemote clones the local database into the remote database.
@@ -492,79 +480,74 @@ func (h *apiHandler) handleCloneLocalToRemote(w http.ResponseWriter, r *http.Req
 	}
 
 	includeConfig := r.URL.Query().Get("include_config") == "1"
+	h.startOperation(w, "database_clone_to_remote", func() (string, error) {
+		return h.cloneLocalToRemote(includeConfig)
+	})
+}
 
+func (h *apiHandler) cloneLocalToRemote(includeConfig bool) (string, error) {
 	if h.db.IsLocal() {
-		h.cloneActiveLocalIntoRemote(w, includeConfig)
-		return
+		return h.cloneActiveLocalIntoRemote(includeConfig)
 	}
 
 	// Active database is remote: import the local file into the live remote.
 	source := strings.TrimSpace(h.config.Database.Path)
 	if source == "" {
-		writeWebErr(w, errLocalDBPathNotSet)
-		return
+		return "", errLocalDBPathNotSet
 	}
 	info, err := os.Stat(source)
 	if err != nil || info.IsDir() {
-		writeWebErr(w, errLocalDBFileMissing)
-		return
+		return "", errLocalDBFileMissing
 	}
 
 	if err := h.db.ImportFromLocalFile(source, includeConfig); err != nil {
-		writeWebErrf(w, errImportDBFailed, "failed to import database: %v", err)
-		return
+		return "", errImportDBFailed.Format("failed to import database: %v", err)
 	}
 	if includeConfig {
 		if _, err := h.hashStoredWebUIPassword(); err != nil {
-			writeWebErrf(w, errImportDBFailed, "failed to secure imported config: %v", err)
-			return
+			return "", errImportDBFailed.Format("failed to secure imported config: %v", err)
 		}
 		if h.configFromDB {
 			if err := h.reloadConfigFromDB(); err != nil {
-				writeWebErrf(w, errImportDBFailed, "failed to reload imported config: %v", err)
-				return
+				return "", errImportDBFailed.Format("failed to reload imported config: %v", err)
 			}
 		}
 	}
 
 	h.db.InvalidateMuteCache()
 	log.Printf("WebUI: local database file %s cloned into remote database (includeConfig=%v)", source, includeConfig)
-	jsonResponse(w, map[string]string{"status": "ok", "message": "Local database file cloned into remote database."})
+	return "Local database file cloned into remote database.", nil
 }
 
 // cloneActiveLocalIntoRemote exports the live local database and merges it into
 // the configured (but not live) remote database. The active local database is
 // unchanged, so no mute-cache invalidation or config reload is required here.
-func (h *apiHandler) cloneActiveLocalIntoRemote(w http.ResponseWriter, includeConfig bool) {
+func (h *apiHandler) cloneActiveLocalIntoRemote(includeConfig bool) (string, error) {
 	tmpPath, err := h.db.ExportToLocalFile(h.cloneTempDir(), includeConfig)
 	if err != nil {
-		writeWebErrf(w, errExportDBFailed, "failed to export local database: %v", err)
-		return
+		return "", errExportDBFailed.Format("failed to export local database: %v", err)
 	}
 	defer os.Remove(tmpPath)
 
 	remote, err := database.OpenRemote(h.remoteCloneConfig())
 	if err != nil {
-		writeWebErrf(w, errCloneRemoteConnectFailed, "%v", err)
-		return
+		return "", errCloneRemoteConnectFailed.Format("%v", err)
 	}
 	defer remote.Close()
 
 	if err := remote.ImportFromLocalFile(tmpPath, includeConfig); err != nil {
-		writeWebErrf(w, errImportDBFailed, "failed to import database into remote: %v", err)
-		return
+		return "", errImportDBFailed.Format("failed to import database into remote: %v", err)
 	}
 	if includeConfig {
 		// Upgrade any plaintext web UI password copied into the remote so the
 		// destination never stores a credential in the clear.
 		if _, err := h.hashStoredWebUIPasswordOn(remote); err != nil {
-			writeWebErrf(w, errImportDBFailed, "failed to secure imported config: %v", err)
-			return
+			return "", errImportDBFailed.Format("failed to secure imported config: %v", err)
 		}
 	}
 
 	log.Printf("WebUI: live local database cloned into configured remote database (includeConfig=%v)", includeConfig)
-	jsonResponse(w, map[string]string{"status": "ok", "message": "Local database cloned into the configured remote database."})
+	return "Local database cloned into the configured remote database.", nil
 }
 
 func (h *apiHandler) hashStoredWebUIPassword() (bool, error) {

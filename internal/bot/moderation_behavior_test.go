@@ -3,6 +3,7 @@
 package bot
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -141,6 +142,45 @@ func TestBehavior_FlaggedWithoutAction_FallsBackToReport(t *testing.T) {
 
 	assert.True(t, adminCardSent(tg, -999),
 		"a flagged message with no actionable rule must still be escalated to admins")
+}
+
+func TestBehavior_UnknownAction_FallsBackToReport(t *testing.T) {
+	b, tg := behaviorBot(t)
+	notifyAdmin := false
+	rules := []config.ModerationRule{{Trigger: "spam", Action: "unknown", NotifyAdmin: &notifyAdmin}}
+
+	b.handleBadWordDetected(testMessage(-100, 7, 55, "buy now"), "buy now", false, rules, "")
+
+	assert.True(t, adminCardSent(tg, -999), "an unknown action must retain the safe report fallback")
+}
+
+func TestBehavior_MessageDeletedDuringNotificationDelay_SkipsAdminReport(t *testing.T) {
+	b, tg := behaviorBot(t)
+	b.config.AI.ContentModeration.AdminNotificationDelaySeconds = 0
+	tg.ReactionFunc = func(chatID int64, messageID int, emoji string) error {
+		return errors.New("message to react not found")
+	}
+	rules := []config.ModerationRule{{Trigger: "spam", Action: "report"}}
+
+	b.handleBadWordDetected(testMessage(-100, 7, 55, "buy now"), "buy now", false, rules, "")
+
+	assert.False(t, adminCardSent(tg, -999), "a deleted source message must not produce an admin card")
+}
+
+func TestBehavior_MessageDeletedDuringNotificationDelay_StillRunsWarn(t *testing.T) {
+	b, tg := behaviorBot(t)
+	b.config.AI.ContentModeration.AdminNotificationDelaySeconds = 0
+	tg.ReactionFunc = func(chatID int64, messageID int, emoji string) error {
+		return errors.New("message to react not found")
+	}
+	rules := []config.ModerationRule{{Trigger: "rude", Action: "warn"}}
+
+	b.handleBadWordDetected(testMessage(-100, 7, 55, "you fool"), "you fool", false, rules, "")
+
+	has, err := b.db.HasWarningForMessage(7, 55)
+	require.NoError(t, err)
+	assert.True(t, has, "the automatic warning must still be recorded")
+	assert.False(t, adminCardSent(tg, -999), "the failed presence probe must suppress the admin notice")
 }
 
 // Idempotency: the same message must not be moderated twice in quick

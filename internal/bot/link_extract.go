@@ -38,9 +38,12 @@ type ExtractorAPIResponse struct {
 type DiffbotAPIResponse struct {
 	HumanLanguage string `json:"humanLanguage"`
 	Title         string `json:"title"`
+	ErrorCode     int    `json:"errorCode"`
+	Error         string `json:"error"`
 	Objects       []struct {
 		Title       string `json:"title"`
 		Text        string `json:"text"`
+		Content     string `json:"content"`
 		Description string `json:"description"`
 	} `json:"objects"`
 }
@@ -190,7 +193,9 @@ func (b *Bot) fetchAndExtractLinkContent(targetURL string) (content string, titl
 		cfContent, cfTitle, cfErr := b.fetchWithCloudflare(targetURL)
 		if cfErr == nil && len(cfContent) > 0 {
 			log.Printf("Cloudflare Browser Rendering succeeded for %s (%d chars)", targetURL, len(cfContent))
-			return cfContent, cfTitle, "", nil
+			if tryAccept(cfContent, cfTitle, "", "Cloudflare Browser Rendering") {
+				return cfContent, cfTitle, "", nil
+			}
 		}
 		if cfErr != nil {
 			log.Printf("Cloudflare Browser Rendering failed for %s: %v", targetURL, cfErr)
@@ -305,6 +310,9 @@ func (b *Bot) fetchWithDiffbot(targetURL string) (content string, title string, 
 		log.Printf("Diffbot invalid JSON response: %s", string(bodyBytes))
 		return "", "", "", fmt.Errorf("failed to parse Diffbot response: %w", err)
 	}
+	if diffbotResp.Error != "" {
+		return "", "", "", fmt.Errorf("Diffbot error %d: %s", diffbotResp.ErrorCode, diffbotResp.Error)
+	}
 
 	if len(diffbotResp.Objects) == 0 {
 		log.Printf("Diffbot returned no objects, full response: %s", string(bodyBytes))
@@ -320,6 +328,9 @@ func (b *Bot) fetchWithDiffbot(targetURL string) (content string, title string, 
 			titles = append(titles, obj.Title)
 		}
 		text := obj.Text
+		if text == "" {
+			text = obj.Content
+		}
 		if text == "" {
 			text = obj.Description
 		}

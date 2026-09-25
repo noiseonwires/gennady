@@ -69,9 +69,9 @@ just change the prompt.
 
 ### 🖼️ Content security beyond text
 
-- **Image moderation via OCR & vision.** Violations hidden in screenshots and images are
-  caught too - not just in text. Run OCR (Azure Vision or the OCR.space cloud API) to read
-  text out of images and feed it through the same moderation rules.
+- **Image moderation via multimodal AI, OCR & vision.** Violations hidden in screenshots and
+  images are caught too - not just in text. Use an opted-in multimodal model, Azure Vision,
+  or OCR.space to describe images and feed visible text through the same moderation rules.
 - **Azure Vision & Content Safety** integration for image analysis and safety scoring.
 - **Profile-photo screening.** Optionally screen a new user's profile photos through Azure
   Content Safety on their first message; a flagged photo adds a note to their profile that the
@@ -113,8 +113,9 @@ just change the prompt.
 - **Link summaries.** When someone shares a link, the bot fetches the page and posts a concise
   summary - and can translate the page into your chat's language - with a multi-provider
   extraction fallback chain for tough pages.
-- **Creative replies.** Witty, contextual AI responses, rate-limited so the bot stays charming
-  instead of spammy.
+- **Creative replies.** Witty, contextual AI responses with optional model-directed web search
+  and read-only access to scoped chat history, rate-limited so the bot stays charming instead
+  of spammy.
 
 ### 📰 RSS publishing
 
@@ -225,6 +226,7 @@ references in [CONFIG_REFERENCE_en.md](docs/CONFIG_REFERENCE_en.md) and
 
 - [installation.md](docs/installation.md) - local, Docker and cloud installation, plus database/config migration.
 - [config.md](docs/config.md) - configuration guide with examples.
+- [reputation.md](docs/reputation.md) - event-based karma principles, scoring rules, safeguards and defaults.
 - [cookbook.md](docs/cookbook.md) - recipes combining AI prompts with config options for moderation and more.
 - [CONFIG_REFERENCE_en.md](docs/CONFIG_REFERENCE_en.md) / [CONFIG_REFERENCE_ru.md](docs/CONFIG_REFERENCE_ru.md) - auto-generated full reference of every key and its environment variable.
 

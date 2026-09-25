@@ -8,7 +8,7 @@ function profilesPage() {
         total: 0,
         offset: 0,
         limit: 25,
-        sort: 'discovery',   // 'discovery' (newest first-seen first) | 'name'
+        sort: 'discovery',   // 'discovery' (newest first-seen first) | 'name' | 'score'
         search: '',
         loading: false,
         get currentPage() { return Math.floor(this.offset / this.limit) + 1; },
@@ -20,7 +20,7 @@ function profilesPage() {
         syncRoute(params) {
             queueMicrotask(() => {
                 this.offset = Math.max(0, parseInt(params.offset, 10) || 0);
-                this.sort = params.sort === 'name' ? 'name' : 'discovery';
+                this.sort = ['name', 'score'].includes(params.sort) ? params.sort : 'discovery';
                 this.search = params.search || '';
                 this.fetch();
             });
@@ -64,9 +64,16 @@ function profilesPage() {
         },
 
         reputationClass(rep) {
-            if (rep === 'good') return 'badge-green';
-            if (rep === 'bad') return 'badge-red';
+            if (rep === 'good' || rep === 'very_good') return 'badge-green';
+            if (rep === 'bad' || rep === 'very_bad') return 'badge-red';
             return 'badge-yellow';
+        },
+
+        reputationScoreLabel(score) {
+            const chat = score.chat_name || String(score.chat_id);
+            const value = Number(score.score || 0);
+            const formatted = (value > 0 ? '+' : '') + value.toFixed(1);
+            return chat + ': ' + score.grade + ' (' + formatted + ')';
         },
 
         // profileLabel formats a user's identity the same way the bot's

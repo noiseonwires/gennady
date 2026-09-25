@@ -29,8 +29,8 @@ type fakeSource struct {
 	checkpoints  int
 }
 
-func (f *fakeSource) IsLocal() bool         { return f.local }
-func (f *fakeSource) WALCheckpoint() error  { f.checkpoints++; return nil }
+func (f *fakeSource) IsLocal() bool        { return f.local }
+func (f *fakeSource) WALCheckpoint() error { f.checkpoints++; return nil }
 func (f *fakeSource) ExportToLocalFile(dir string, includeConfig bool) (string, error) {
 	f.exportCalls++
 	f.lastIncluded = includeConfig

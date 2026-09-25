@@ -55,6 +55,18 @@ func (b *Bot) runUserProfilesUpdate() {
 
 	log.Printf("👤 Processing %d active users across %d chat(s)", len(allData), len(chatIDs))
 
+	// Older messages (before the analysis window) for the {{previous_days_messages}}
+	// placeholder. Fetched in one query and only when a prompt actually uses it.
+	var previousMessages map[int64][]database.MessageInfo
+	if n := b.previousDaysMessagesCount(); n > 0 {
+		prev, perr := b.db.GetPreviousMessagesForUsers(chatIDs, since, n)
+		if perr != nil {
+			log.Printf("👤 Error fetching previous-days messages: %v", perr)
+		} else {
+			previousMessages = prev
+		}
+	}
+
 	botUserID := b.botSelf.ID
 	totalProcessed := 0
 	totalErrors := 0
@@ -71,7 +83,7 @@ func (b *Bot) runUserProfilesUpdate() {
 			continue
 		}
 
-		if err := b.generateOrUpdateUserProfile(pd, since); err != nil {
+		if err := b.generateOrUpdateUserProfile(pd, since, previousMessages[userID]); err != nil {
 			log.Printf("👤 Error processing profile for user %d (%s): %v", userID, pd.Username, err)
 			totalErrors++
 		} else {
@@ -80,6 +92,28 @@ func (b *Bot) runUserProfilesUpdate() {
 	}
 
 	log.Printf("👤 User profiles update complete: %d processed, %d errors", totalProcessed, totalErrors)
+}
+
+// previousDaysMessagesCount returns how many pre-window messages should be
+// injected into the profile prompts. It is 0 when none of the configured
+// profile prompts uses the {{previous_days_messages}} placeholder, so the extra
+// DB work is skipped entirely for setups that don't need it.
+func (b *Bot) previousDaysMessagesCount() int {
+	cfg := b.config.AI.UserProfiles
+	used := false
+	for _, p := range []string{cfg.Prompt.System, cfg.Prompt.User, cfg.UpdatePrompt.System, cfg.UpdatePrompt.User} {
+		if strings.Contains(p, "{{"+PreviousDaysMessagesPlaceholder+"}}") {
+			used = true
+			break
+		}
+	}
+	if !used {
+		return 0
+	}
+	if n := cfg.PreviousDaysMessagesCount; n > 0 {
+		return n
+	}
+	return DefaultPreviousDaysMessages
 }
 
 // isUserForeverMuted reports whether the user has an active permanent ("forever")
@@ -102,13 +136,14 @@ func (b *Bot) isUserForeverMuted(userID int64, chatIDs []int64) bool {
 }
 
 // generateOrUpdateUserProfile generates a new profile or updates an existing one for a user.
-func (b *Bot) generateOrUpdateUserProfile(pd *database.ProfileData, since time.Time) error {
+func (b *Bot) generateOrUpdateUserProfile(pd *database.ProfileData, since time.Time, previousMessages []database.MessageInfo) error {
 	if len(pd.Messages) == 0 {
 		return nil
 	}
 
 	// Build message digest for AI
 	messageDigest := b.buildMessageDigest(pd.Messages, pd.Warnings, pd.Mutes, pd.Cleared, pd.MessageActions, since)
+	previousDigest := buildPreviousMessagesDigest(previousMessages)
 
 	// Check for existing profile (1 DB query per user - cached after first lookup)
 	existingProfile, err := b.db.GetUserProfile(pd.UserID)
@@ -118,9 +153,9 @@ func (b *Bot) generateOrUpdateUserProfile(pd *database.ProfileData, since time.T
 
 	var profileText string
 	if existingProfile != nil {
-		profileText, err = b.updateUserProfileWithAI(existingProfile, messageDigest, pd.Username)
+		profileText, err = b.updateUserProfileWithAI(existingProfile, messageDigest, previousDigest, pd.Username)
 	} else {
-		profileText, err = b.generateUserProfileWithAI(messageDigest, pd.Username)
+		profileText, err = b.generateUserProfileWithAI(messageDigest, previousDigest, pd.Username)
 	}
 	if err != nil {
 		return fmt.Errorf("AI profile generation failed: %w", err)
@@ -138,6 +173,7 @@ func (b *Bot) generateOrUpdateUserProfile(pd *database.ProfileData, since time.T
 	if err := b.db.UpsertUserProfile(profile); err != nil {
 		return fmt.Errorf("failed to save profile: %w", err)
 	}
+	b.recordAIReputation(pd.UserID, reputation)
 
 	b.invalidateProfileCache(pd.UserID)
 
@@ -220,16 +256,37 @@ func (b *Bot) buildMessageDigest(messages []database.MessageInfo, warnings int, 
 	return sb.String()
 }
 
+// buildPreviousMessagesDigest renders older (pre-window) messages for the
+// {{previous_days_messages}} placeholder. Returns an empty string when there is
+// no earlier history, so the placeholder simply collapses to nothing.
+func buildPreviousMessagesDigest(messages []database.MessageInfo) string {
+	if len(messages) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString(i18n.Tf("profile.digest_previous_days_header", len(messages)) + "\n")
+	for _, msg := range messages {
+		text := msg.Text
+		if len(text) > 300 {
+			text = text[:300] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("[%s] %s\n", msg.Timestamp.Format("2006-01-02 15:04"), text))
+	}
+	return sb.String()
+}
+
 // generateUserProfileWithAI creates a new user profile using AI.
-func (b *Bot) generateUserProfileWithAI(messageDigest string, username string) (string, error) {
+func (b *Bot) generateUserProfileWithAI(messageDigest, previousDigest string, username string) (string, error) {
 	cfg := b.config.AI.UserProfiles
 	if cfg.Prompt.System == "" || cfg.Prompt.User == "" {
 		return "", fmt.Errorf("user_profiles.prompt.system and prompt.user must be configured")
 	}
 
 	replacements := map[string]string{
-		"username": username,
-		"messages": messageDigest,
+		"username":                      username,
+		"messages":                      messageDigest,
+		PreviousDaysMessagesPlaceholder: previousDigest,
 	}
 
 	systemPrompt := applyReplacements(cfg.Prompt.System, replacements)
@@ -241,16 +298,17 @@ func (b *Bot) generateUserProfileWithAI(messageDigest string, username string) (
 }
 
 // updateUserProfileWithAI updates an existing user profile with new data.
-func (b *Bot) updateUserProfileWithAI(existing *database.UserProfile, messageDigest string, username string) (string, error) {
+func (b *Bot) updateUserProfileWithAI(existing *database.UserProfile, messageDigest, previousDigest string, username string) (string, error) {
 	cfg := b.config.AI.UserProfiles
 	if cfg.UpdatePrompt.System == "" || cfg.UpdatePrompt.User == "" {
 		return "", fmt.Errorf("user_profiles.update_prompt.system and update_prompt.user must be configured")
 	}
 
 	replacements := map[string]string{
-		"username":         username,
-		"messages":         messageDigest,
-		"existing_profile": existing.Profile,
+		"username":                      username,
+		"messages":                      messageDigest,
+		"existing_profile":              existing.Profile,
+		PreviousDaysMessagesPlaceholder: previousDigest,
 	}
 
 	systemPrompt := applyReplacements(cfg.UpdatePrompt.System, replacements)
@@ -262,27 +320,81 @@ func (b *Bot) updateUserProfileWithAI(existing *database.UserProfile, messageDig
 }
 
 // extractReputation parses the reputation value from AI-generated profile text.
+// Recognised grades, weakest to strongest: very_bad, bad, neutral, good, very_good.
 func extractReputation(profileText string) string {
 	lower := strings.ToLower(profileText)
 
 	// Look for explicit "Reputation: xxx" pattern
 	for _, prefix := range []string{"reputation:", "reputation -", "репутация:"} {
 		if idx := strings.LastIndex(lower, prefix); idx != -1 {
-			rest := strings.TrimSpace(lower[idx+len(prefix):])
-			// Take first word
-			word := strings.Fields(rest)
-			if len(word) > 0 {
-				switch {
-				case strings.Contains(word[0], "good") || strings.Contains(word[0], "хорош"):
-					return "good"
-				case strings.Contains(word[0], "bad") || strings.Contains(word[0], "плох"):
-					return "bad"
-				}
+			if grade := parseReputationValue(lower[idx+len(prefix):]); grade != "" {
+				return grade
 			}
 		}
 	}
 
 	return "neutral"
+}
+
+// parseReputationValue reads the reputation grade out of the text following a
+// "Reputation:" marker. Only the first two words are considered, so a trailing
+// justification ("bad - not a good fit") cannot flip the verdict. Returns an
+// empty string when no grade is recognised.
+func parseReputationValue(rest string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(rest), "\n")
+	line = strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' {
+			return ' '
+		}
+		return r
+	}, line)
+
+	fields := strings.Fields(strings.Trim(line, " \t\"'`*.,;:!"))
+	if len(fields) == 0 {
+		return ""
+	}
+	if len(fields) > 2 {
+		fields = fields[:2]
+	}
+	value := strings.Trim(strings.Join(fields, " "), " \"'`*.,;:!")
+
+	// The intensifier ("very bad" / "очень хороший") must be checked before the
+	// plain grades, otherwise "very good" would be read as plain "good".
+	grade := reputationGrade(value)
+	if hasReputationIntensifier(value) {
+		switch grade {
+		case "good":
+			return "very_good"
+		case "bad":
+			return "very_bad"
+		}
+	}
+	return grade
+}
+
+// hasReputationIntensifier reports whether the reputation value is qualified as
+// an extreme one ("very bad", "очень хороший", "very_good", ...).
+func hasReputationIntensifier(value string) bool {
+	for _, marker := range []string{"very", "extremely", "очень", "крайне", "исключительно"} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// reputationGrade maps a raw reputation value to "good", "bad", "neutral" or ""
+// when nothing recognisable is present.
+func reputationGrade(value string) string {
+	switch {
+	case strings.Contains(value, "good") || strings.Contains(value, "хорош"):
+		return "good"
+	case strings.Contains(value, "bad") || strings.Contains(value, "плох"):
+		return "bad"
+	case strings.Contains(value, "neutral") || strings.Contains(value, "нейтрал"):
+		return "neutral"
+	}
+	return ""
 }
 
 // getUserProfileForModeration returns a formatted user profile block for use in
@@ -296,6 +408,10 @@ func extractReputation(profileText string) string {
 // Returns an empty string only when none of the above produces any content.
 func (b *Bot) getUserProfileForModeration(userID int64, chatID int64) string {
 	var lines []string
+	reputationGrade, reputationScore := b.reputationPromptValues(userID, chatID)
+	if b.reputationEnabled() {
+		lines = append(lines, fmt.Sprintf("Score reputation: %s (score %s).", reputationGrade, reputationScore))
+	}
 
 	// Admin indicator
 	if b.isUserAdmin(userID) {
@@ -366,16 +482,20 @@ func (b *Bot) getUserProfileForModeration(userID int64, chatID int64) string {
 // getUserReputationForModeration returns a compact reputation block for the
 // {{user_reputation}} moderation placeholder. It is a token-cheap alternative
 // to the full {{user_profile}} block: it surfaces a new-user marker (when the
-// author is within the new-user window), the AI reputation score and, when
+// author is within the new-user window), the event-based reputation score and, when
 // present, a note that an automated screening check marked the profile
 // suspicious. Returns an empty string when none of those apply.
-func (b *Bot) getUserReputationForModeration(userID int64) string {
+func (b *Bot) getUserReputationForModeration(userID int64, chatID int64) string {
 	var lines []string
 
 	// New-user marker: surfaced regardless of the AI profile / screening
 	// features, since it derives only from first-seen tracking.
 	if b.isNewUser(userID) {
 		lines = append(lines, i18n.T("mod.user_new"))
+	}
+	if b.reputationEnabled() {
+		grade, score := b.reputationPromptValues(userID, chatID)
+		lines = append(lines, fmt.Sprintf("Score reputation: %s (score %s).", grade, score))
 	}
 
 	if b.config.AI.UserProfiles.Enabled ||

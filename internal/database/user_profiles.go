@@ -67,11 +67,15 @@ func (db *DB) AppendTgProfileAnalysis(userID int64, username string, findings []
 		).Scan(&existing)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
+			analysis := strings.Join(cleaned, "\n")
 			if _, err := tx.Exec(
 				`INSERT INTO user_profiles (user_id, username, profile, reputation, tg_profile_analysis, first_seen_at, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				userID, username, "", "neutral", strings.Join(cleaned, "\n"), "", now, now,
+				userID, username, "", "neutral", analysis, "", now, now,
 			); err != nil {
+				return err
+			}
+			if err := setProfileScreeningEventsTx(tx, userID, analysis, now); err != nil {
 				return err
 			}
 		case err != nil:
@@ -89,7 +93,9 @@ func (db *DB) AppendTgProfileAnalysis(userID int64, username string, findings []
 				}
 			}
 			if len(toAdd) == 0 {
-				// Nothing new - leave the row untouched.
+				if err := setProfileScreeningEventsTx(tx, userID, existing, now); err != nil {
+					return err
+				}
 				if err := tx.Commit(); err != nil {
 					return err
 				}
@@ -104,6 +110,9 @@ func (db *DB) AppendTgProfileAnalysis(userID int64, username string, findings []
 				`UPDATE user_profiles SET tg_profile_analysis = ?, updated_at = ? WHERE user_id = ?`,
 				newAnalysis, now, userID,
 			); err != nil {
+				return err
+			}
+			if err := setProfileScreeningEventsTx(tx, userID, newAnalysis, now); err != nil {
 				return err
 			}
 		}
@@ -336,8 +345,18 @@ func (db *DB) GetUserMessageActions(userID int64, since time.Time) (map[int][]st
 // DeleteUserProfile removes a user profile.
 func (db *DB) DeleteUserProfile(userID int64) error {
 	return db.retryOnTransientError(func() error {
-		_, err := db.conn.Exec(`DELETE FROM user_profiles WHERE user_id = ?`, userID)
-		return err
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.Exec(`DELETE FROM user_profiles WHERE user_id = ?`, userID); err != nil {
+			return err
+		}
+		if err := setProfileScreeningEventsTx(tx, userID, "", time.Time{}); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}, "delete user profile")
 }
 
@@ -498,4 +517,54 @@ func (db *DB) GetAllProfileData(chatIDs []int64, since time.Time) (map[int64]*Pr
 	warnRows.Close()
 
 	return result, nil
+}
+
+// GetPreviousMessagesForUsers returns, per user, up to perUser of their most
+// recent messages sent BEFORE the given time across the given chats (i.e. the
+// history preceding the current profile-analysis window). Messages are returned
+// in chronological order. Used to give the profile generator some longer-term
+// context via the {{previous_days_messages}} placeholder.
+func (db *DB) GetPreviousMessagesForUsers(chatIDs []int64, before time.Time, perUser int) (map[int64][]MessageInfo, error) {
+	if len(chatIDs) == 0 || perUser <= 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(chatIDs))
+	args := make([]interface{}, 0, len(chatIDs)+2)
+	for i, id := range chatIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, before, perUser)
+
+	query := fmt.Sprintf(`SELECT message_id, chat_id, user_id, username, text, timestamp FROM (
+			SELECT message_id, chat_id, user_id, username, text, timestamp,
+			       ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY timestamp DESC) AS rn
+			FROM message_info
+			WHERE chat_id IN (%s) AND timestamp < ? AND text IS NOT NULL AND text != ''
+		) WHERE rn <= ?
+		ORDER BY user_id, timestamp ASC`, strings.Join(placeholders, ","))
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query previous messages: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]MessageInfo)
+	for rows.Next() {
+		var m MessageInfo
+		var ts string
+		var username *string
+		if err := rows.Scan(&m.MessageID, &m.ChatID, &m.UserID, &username, &m.Text, &ts); err != nil {
+			return nil, err
+		}
+		if username != nil {
+			m.Username = *username
+		}
+		m.Timestamp = parseTime(ts)
+		result[m.UserID] = append(result[m.UserID], m)
+	}
+
+	return result, rows.Err()
 }

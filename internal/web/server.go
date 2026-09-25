@@ -71,6 +71,7 @@ func NewWebServer(cfg *config.Config, db *database.DB, diagnostics *DiagnosticsT
 		pathPrefix:          prefix,
 		moderatorPathPrefix: modPrefix,
 		diagnostics:         diagnostics,
+		operations:          newOperationStore(),
 		startedAt:           time.Now(),
 	}
 
@@ -179,6 +180,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.Mux.HandleFunc(p+"/api/muted", ws.requireAuth(ws.handler.handleGetMutedUsers))
 	ws.Mux.HandleFunc(p+"/api/stats", ws.requireAuth(ws.handler.handleGetDBStats))
 	ws.Mux.HandleFunc(p+"/api/tokens", ws.requireAuth(ws.handler.handleGetTokenUsage))
+	ws.Mux.HandleFunc(p+"/api/tokens/cleanup", ws.requireAuth(ws.handler.handleCleanupTokenUsage))
 	ws.Mux.HandleFunc(p+"/api/modstats", ws.requireAuth(ws.handler.handleGetModerationStats))
 	ws.Mux.HandleFunc(p+"/api/messages", ws.requireAuth(ws.handler.handleGetMessages))
 	ws.Mux.HandleFunc(p+"/api/messages/delete", ws.requireAuth(ws.handler.handleDeleteMessage))
@@ -191,12 +193,14 @@ func (ws *WebServer) registerRoutes() {
 	ws.Mux.HandleFunc(p+"/api/profiles", ws.requireAuth(ws.handler.handleGetProfiles))
 	ws.Mux.HandleFunc(p+"/api/profiles/delete", ws.requireAuth(ws.handler.handleDeleteProfile))
 	ws.Mux.HandleFunc(p+"/api/logs", ws.requireAuth(ws.handler.handleGetLogs))
+	ws.Mux.HandleFunc(p+"/api/operations/", ws.requireAuth(ws.handler.handleGetOperation))
 	ws.Mux.HandleFunc(p+"/api/chats", ws.requireAuth(ws.handler.handleListChats))
 
 	ws.Mux.HandleFunc(p+"/api/diagnostics", ws.requireAuth(ws.handler.handleGetDiagnostics))
 	ws.Mux.HandleFunc(p+"/api/diagnostics/webhook", ws.requireAuth(ws.handler.handleGetWebhookInfo))
 	ws.Mux.HandleFunc(p+"/api/diagnostics/test/", ws.requireAuth(ws.handler.handleTestAPI))
 	ws.Mux.HandleFunc(p+"/api/diagnostics/debug/moderation/", ws.requireAuth(ws.handler.handleDebugModeration))
+	ws.Mux.HandleFunc(p+"/api/diagnostics/debug/creative/", ws.requireAuth(ws.handler.handleDebugCreativeReply))
 	ws.Mux.HandleFunc(p+"/api/diagnostics/debug/moderation-by-id/", ws.requireAuth(ws.handler.handleDebugModerationByID))
 	ws.Mux.HandleFunc(p+"/api/diagnostics/debug/extract/", ws.requireAuth(ws.handler.handleDebugExtract))
 	ws.Mux.HandleFunc(p+"/api/diagnostics/debug/ocr/", ws.requireAuth(ws.handler.handleDebugOCR))
@@ -242,6 +246,11 @@ func (ws *WebServer) staticHandler(prefix string) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
+
+		// The SPA and API must be deployed as one compatible unit. Prevent
+		// browsers and reverse proxies from retaining an older script bundle
+		// after the server has been upgraded.
+		w.Header().Set("Cache-Control", "no-store, max-age=0")
 
 		// Try to open the requested file; fall back to index.html for SPA routing
 		f, err := staticFS.Open(trimmed)

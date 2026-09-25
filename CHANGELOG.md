@@ -4,6 +4,29 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-25
+
+### Added
+
+- **Event-based reputation (karma)** with configurable scoring, decay and grades,
+  separate AI-profile verdicts, night-mode exemptions and prompt placeholders.
+- **AI tools for web search and chat-history lookup** in creative replies.
+- **Richer user profiles** with five reputation grades and optional previous-days
+  message context.
+- **Album-aware moderation and history**, including grouped context and deletion.
+- Optional Vision/OCR analysis for image history outside moderated chats and topics.
+
+### Changed
+
+- Long-running Web UI operations now run asynchronously with progress reporting.
+- Image processing can use multimodal models, and recorded media always includes
+  an attachment descriptor alongside its caption.
+
+### Fixed
+
+- Improved database startup and schema checks, Telegram webhook diagnostics, SPA
+  caching, link extraction, timestamps, panic handling and token-usage accounting.
+
 ## [1.2.0] - 2026-07-31
 
 ### Added
@@ -54,5 +77,6 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Bot mentions/replies aimed at the bot's own messages now get a creative reply
   instead of the moderation path; caption mentions are detected.
 
+[1.3.0]: https://github.com/noiseonwires/gennady/releases/tag/v1.3.0
 [1.2.0]: https://github.com/noiseonwires/gennady/releases/tag/v1.2.0
 [1.1.0]: https://github.com/noiseonwires/gennady/releases/tag/v1.1.0

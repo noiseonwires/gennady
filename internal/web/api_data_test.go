@@ -5,6 +5,7 @@ package web
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"gennadium/internal/config"
 	"gennadium/internal/database"
 )
 
@@ -107,6 +109,11 @@ func TestHandleGetDBStats(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 	body := decodeJSONBody(t, rr)
 	assert.Contains(t, body, "table_counts")
+	counts := body["table_counts"].(map[string]any)
+	assert.Contains(t, counts, "reputation_events")
+	assert.Contains(t, counts, "reputation_clean_state")
+	assert.Contains(t, counts, "moderation_stats")
+	assert.Contains(t, counts, "website_snapshots")
 	assert.Contains(t, body, "database_provider")
 }
 
@@ -117,6 +124,37 @@ func TestHandleGetTokenUsage(t *testing.T) {
 	body := decodeJSONBody(t, rr)
 	assert.Contains(t, body, "rows")
 	assert.Contains(t, body, "totals")
+}
+
+func TestHandleCleanupTokenUsage(t *testing.T) {
+	cfg := newTestConfig()
+	disabled := false
+	cfg.AI.LightModel.Configs = []config.AIModelConfig{{DeploymentName: "light"}}
+	cfg.AI.FullModel.Configs = []config.AIModelConfig{
+		{DeploymentName: "full"},
+		{DeploymentName: "disabled", Enabled: &disabled},
+	}
+	h := newTestHandler(t, cfg)
+	require.NoError(t, h.db.RecordTokenUsage("light", "moderation", "2026-06-09", 10, 5))
+	require.NoError(t, h.db.RecordTokenUsage("disabled", "summary", "2026-06-09", 20, 10))
+	require.NoError(t, h.db.RecordTokenUsage("stale", "summary", "2026-06-09", 30, 15))
+
+	rr := httptest.NewRecorder()
+	h.handleCleanupTokenUsage(rr, httptest.NewRequest(http.MethodPost, "/api/tokens/cleanup", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, float64(1), decodeJSONBody(t, rr)["deleted_rows"])
+
+	stats, err := h.db.GetTokenUsageStats("2026-06-09")
+	require.NoError(t, err)
+	require.Len(t, stats, 2)
+	models := []string{stats[0].Model, stats[1].Model}
+	assert.ElementsMatch(t, []string{"disabled", "light"}, models)
+}
+
+func TestHandleCleanupTokenUsage_MethodNotAllowed(t *testing.T) {
+	h := newTestHandler(t, newTestConfig())
+	rr := get(t, h, h.handleCleanupTokenUsage, "/api/tokens/cleanup")
+	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 }
 
 func TestHandleGetDiagnostics(t *testing.T) {
@@ -196,6 +234,37 @@ func TestHandleDebugModeration_NoTester(t *testing.T) {
 	rr := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/diagnostics/debug/moderation/svc", strings.NewReader(`{"message":"hi"}`))
 	h.handleDebugModeration(rr, r)
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+}
+
+func TestHandleDebugCreativeReply(t *testing.T) {
+	h := newTestHandler(t, newTestConfig())
+	h.apiTester = &mockAPITester{}
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/diagnostics/debug/creative/openai_light:m", strings.NewReader(`{"message":"what happened?"}`))
+	h.handleDebugCreativeReply(rr, r)
+	assert.Equal(t, http.StatusOK, rr.Code)
+	body := decodeJSONBody(t, rr)
+	assert.Equal(t, "creative sys", body["system_prompt"])
+	assert.Equal(t, "creative resp", body["response"])
+	details := body["details"].(map[string]interface{})
+	assert.Equal(t, true, details["web_search_used"])
+}
+
+func TestHandleDebugCreativeReply_EmptyMessage(t *testing.T) {
+	h := newTestHandler(t, newTestConfig())
+	h.apiTester = &mockAPITester{}
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/diagnostics/debug/creative/svc", strings.NewReader(`{"message":" "}`))
+	h.handleDebugCreativeReply(rr, r)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleDebugCreativeReply_NoTester(t *testing.T) {
+	h := newTestHandler(t, newTestConfig())
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/diagnostics/debug/creative/svc", strings.NewReader(`{"message":"hello"}`))
+	h.handleDebugCreativeReply(rr, r)
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
@@ -340,6 +409,36 @@ func TestHandleGetProfiles_Empty(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
+func TestHandleGetProfiles_ReputationScoresRespectOptOut(t *testing.T) {
+	cfg := newTestConfig()
+	enabled := true
+	cfg.Reputation.Enabled = &enabled
+	cfg.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+	h := newTestHandler(t, cfg)
+	require.NoError(t, h.db.UpsertReputationEvent(database.ReputationEvent{
+		SourceKey: "incident:-100:12:16", UserID: 12, ChatID: -100,
+		Kind: "warning", Component: database.ReputationComponentModeration,
+		Value: 1, OccurredAt: time.Now(),
+	}))
+
+	rr := get(t, h, h.handleGetProfiles, "/api/profiles")
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := decodeJSONBody(t, rr)
+	profiles := body["profiles"].([]any)
+	require.Len(t, profiles, 1)
+	scores := profiles[0].(map[string]any)["reputation_scores"].([]any)
+	require.Len(t, scores, 1)
+	assert.InDelta(t, -5, scores[0].(map[string]any)["score"], 0.001)
+
+	disabled := false
+	cfg.Reputation.Enabled = &disabled
+	rr = get(t, h, h.handleGetProfiles, "/api/profiles")
+	body = decodeJSONBody(t, rr)
+	profile := body["profiles"].([]any)[0].(map[string]any)
+	_, present := profile["reputation_scores"]
+	assert.False(t, present)
+}
+
 func TestHandleGetProfiles_SortAndPagination(t *testing.T) {
 	h := newTestHandler(t, newTestConfig())
 
@@ -385,6 +484,32 @@ func TestHandleGetProfiles_SortAndPagination(t *testing.T) {
 	assert.Equal(t, float64(2), userIDAt(profs, 0))
 	assert.Equal(t, float64(3), userIDAt(profs, 1))
 	assert.Equal(t, float64(1), userIDAt(profs, 2))
+}
+
+func TestHandleGetProfiles_SortByLowestScoreBeforePagination(t *testing.T) {
+	cfg := newTestConfig()
+	cfg.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100, -200}}
+	h := newTestHandler(t, cfg)
+
+	for uid := int64(1); uid <= 3; uid++ {
+		_, err := h.db.RecordIncomingMessage(
+			&database.MessageInfo{MessageID: int(uid), ChatID: -100, UserID: uid, Username: fmt.Sprintf("user%d", uid), Timestamp: time.Now()},
+			database.IncomingMessageOpts{TrackProfile: true, Username: fmt.Sprintf("user%d", uid)},
+		)
+		require.NoError(t, err)
+	}
+	for _, event := range []database.ReputationEvent{
+		{SourceKey: "warning:-100:1", UserID: 1, ChatID: -100, Kind: "warning", Component: database.ReputationComponentModeration, Value: 1},
+		{SourceKey: "warning:-200:2", UserID: 2, ChatID: -200, Kind: "warning", Component: database.ReputationComponentModeration, Value: 2},
+	} {
+		require.NoError(t, h.db.UpsertReputationEvent(event))
+	}
+
+	rr := get(t, h, h.handleGetProfiles, "/api/profiles?sort=score&limit=1")
+	require.Equal(t, http.StatusOK, rr.Code)
+	profiles := decodeJSONBody(t, rr)["profiles"].([]any)
+	require.Len(t, profiles, 1)
+	assert.Equal(t, float64(2), profiles[0].(map[string]any)["user_id"])
 }
 
 func TestHandleGetProfiles_SearchFilter(t *testing.T) {

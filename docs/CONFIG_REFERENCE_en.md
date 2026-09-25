@@ -67,7 +67,7 @@ This file is auto-generated. Do not edit manually.
 
 | YAML Key | ENV | Type | Description |
 |---|---|---|---|
-| `night_mode.enabled` | `NIGHT_MODE_ENABLED` | bool | Enabled - Enable scheduled quiet hours: delete every new message on arrival (without analyzing or storing it) and reply with a notice that self-deletes. Messages from admins and the super-admin are exempt. |
+| `night_mode.enabled` | `NIGHT_MODE_ENABLED` | bool | Enabled - Enable scheduled quiet hours: delete non-exempt new messages on arrival (without analyzing or storing them) and reply with a notice that self-deletes. Admins and reputation-qualified users are exempt. |
 | `night_mode.start_time` | `NIGHT_MODE_START_TIME` | string | Start Time - Window start in 24-hour HH:MM (e.g. 23:00) |
 | `night_mode.end_time` | `NIGHT_MODE_END_TIME` | string | End Time - Window end in 24-hour HH:MM; earlier than start time = overnight window (e.g. 08:00) |
 | `night_mode.days` | `NIGHT_MODE_DAYS` | []string | Days - Weekdays the quiet period may start on (monday/mon ...); empty = every day. An overnight window is attributed to the day it starts on. |
@@ -77,6 +77,14 @@ This file is auto-generated. Do not edit manually.
 | `night_mode.mute_after_messages` | `NIGHT_MODE_MUTE_AFTER_MESSAGES` | int | Mute After Messages - Mute a user until the window ends once they post more than this many messages during night mode (0 = off) |
 | `night_mode.included_topics` | `NIGHT_MODE_INCLUDED_TOPICS` | []chat_topic | Included Topics - (chat, topic) pairs where night mode applies. Empty = every moderation chat / any topic. |
 | `night_mode.excluded_topics` | `NIGHT_MODE_EXCLUDED_TOPICS` | []chat_topic | Excluded Topics - (chat, topic) pairs that override Included Topics - never affected by night mode. |
+
+## Night Mode - Reputation Exemption
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `night_mode.reputation_exemption.enabled` | `NIGHT_MODE_REPUTATION_EXEMPTION_ENABLED` | bool | Enabled - Allow non-admin users whose selected reputations meet the threshold to post during night mode (default: on) |
+| `night_mode.reputation_exemption.source` | `NIGHT_MODE_REPUTATION_EXEMPTION_SOURCE` | string | Source - Reputation to check: score, ai, or both; both requires every globally enabled system to pass (default: both) |
+| `night_mode.reputation_exemption.minimum_grade` | `NIGHT_MODE_REPUTATION_EXEMPTION_MINIMUM_GRADE` | string | Minimum Grade - Lowest grade allowed to post: very_bad, bad, neutral, good, or very_good (default: neutral) |
 
 ## Database Cleanup
 
@@ -194,13 +202,18 @@ This file is auto-generated. Do not edit manually.
 | `ai.content_moderation.skip_admin_users` | `AI_CONTENT_MODERATION_SKIP_ADMIN_USERS` | bool | Skip Admin Users - Skip content moderation for admin users |
 | `ai.content_moderation.complaint_manual_moderation` | `AI_CONTENT_MODERATION_COMPLAINT_MANUAL_MODERATION` | bool | Manual Moderation On Complaint - When a user reports a message (reply + @bot mention) the bot first re-runs AI moderation across every configured model and acts automatically if any flags it. If every model clears it: ON (default) posts the admin decision card for manual review; OFF ends the complaint silently. |
 | `ai.content_moderation.default_mute_minutes` | `AI_CONTENT_MODERATION_DEFAULT_MUTE_MINUTES` | int | Auto-Mute Duration (min) - Duration applied by the 'mute' auto-moderation action (default: 60, 0 = forever) |
+| `ai.content_moderation.admin_notification_delay_seconds` | `AI_CONTENT_MODERATION_ADMIN_NOTIFICATION_DELAY_SECONDS` | int | Admin Notification Delay (sec) - Wait before verifying that the moderated message still exists and notifying the admin chat (default: 3) |
 | `ai.content_moderation.vision_enabled` | `AI_CONTENT_MODERATION_VISION_ENABLED` | bool | Vision Enabled - Enable Azure Vision API for image analysis |
 | `ai.content_moderation.vision_endpoint` | `AI_CONTENT_MODERATION_VISION_ENDPOINT` | string | Vision Endpoint - Azure Vision API endpoint URL |
 | `ai.content_moderation.vision_api_key` | `AI_CONTENT_MODERATION_VISION_API_KEY` | string 🔒 | Vision API Key - API key for Azure Vision |
 | `ai.content_moderation.content_safety_enabled` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_ENABLED` | bool | Content Safety Enabled - Enable Azure Content Safety API |
 | `ai.content_moderation.content_safety_endpoint` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_ENDPOINT` | string | Content Safety Endpoint - Azure Content Safety API endpoint URL |
 | `ai.content_moderation.content_safety_api_key` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_API_KEY` | string 🔒 | Content Safety API Key - API key for Azure Content Safety |
-| `ai.content_moderation.new_user_profile_check_enabled` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_CHECK_ENABLED` | bool | New Member Profile Check - On a new user's first message, screen their whole public profile (name, bio, profile photo, and linked personal channel name/description/photo) with AI and image analysis (Content Safety → Vision → OCR.space), adding a notice to their profile if flagged. Works without Content Safety. |
+| `ai.content_moderation.ai_image_analysis_enabled` | `AI_CONTENT_MODERATION_AI_IMAGE_ANALYSIS_ENABLED` | bool | AI Image Analysis - Analyze images with multimodal AI models before falling back to Azure Vision or OCR.space. Each eligible model must also have 'Use for Image Analysis' enabled. Default: off. |
+| `ai.content_moderation.ai_image_analysis_prompt.system` | `AI_CONTENT_MODERATION_AI_IMAGE_ANALYSIS_PROMPT_SYSTEM` | string | AI Image Analysis (System) - System prompt for describing images, extracting visible text and identifying potentially harmful content |
+| `ai.content_moderation.ai_image_analysis_prompt.user` | `AI_CONTENT_MODERATION_AI_IMAGE_ANALYSIS_PROMPT_USER` | string | AI Image Analysis (User) - User instruction sent alongside the image |
+| `ai.content_moderation.vision_outside_moderation` | `AI_CONTENT_MODERATION_VISION_OUTSIDE_MODERATION` | bool | Analyze Images Outside Moderation - Also run AI / Vision / OCR.space on images in chats and topics excluded from AI moderation, so their recorded history keeps the OCR text and description. Those messages are still never moderated. Costs one image-analysis call per photo. Default: off. |
+| `ai.content_moderation.new_user_profile_check_enabled` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_CHECK_ENABLED` | bool | New Member Profile Check - On a new user's first message, screen their whole public profile (name, bio, profile photo, and linked personal channel name/description/photo) with AI and image analysis (Content Safety → multimodal AI → Vision → OCR.space), adding a notice to their profile if flagged. Works without Content Safety. |
 | `ai.content_moderation.new_user_profile_use_full_model` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_USE_FULL_MODEL` | bool | Profile Check: Use Full Model - Judge the gathered profile text with the full model instead of the light model. Better at spotting subtle spam/scam/promo cues, at a higher per-call cost. Only affects the AI text verdict; photo screening is unchanged. Default: off (light model). |
 | `ai.content_moderation.new_user_profile_prompt.system` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_PROMPT_SYSTEM` | string | New Member Profile Check (System) - System prompt for screening a new member's name, bio, photo and personal channel |
 | `ai.content_moderation.new_user_profile_prompt.user` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_PROMPT_USER` | string | New Member Profile Check (User) - User prompt for screening a new member's profile (placeholders: `{{profile_text}}`) |
@@ -215,8 +228,8 @@ This file is auto-generated. Do not edit manually.
 | `ai.content_moderation.ocrspace_engine` | `AI_CONTENT_MODERATION_OCRSPACE_ENGINE` | int | OCR.space Engine - OCR engine: 1 (default), 2 (best all-round, memes/noisy backgrounds), 3 (highest accuracy, handwriting, 200+ languages) |
 | `ai.content_moderation.prompt.system` | `AI_CONTENT_MODERATION_PROMPT_SYSTEM` | string | Content Moderation (System) - System prompt for content moderation (placeholders: `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reply_to}}`, `{{new_user_rules}}`) |
 | `ai.content_moderation.prompt.user` | `AI_CONTENT_MODERATION_PROMPT_USER` | string | Content Moderation (User) - User prompt for content moderation (placeholders: `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reply_to}}`, `{{new_user_rules}}`) |
-| `ai.content_moderation.warning_prompt.system` | `AI_CONTENT_MODERATION_WARNING_PROMPT_SYSTEM` | string | Warning (System) - System prompt for warning message generation (placeholders: `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{reputation}}`) |
-| `ai.content_moderation.warning_prompt.user` | `AI_CONTENT_MODERATION_WARNING_PROMPT_USER` | string | Warning (User) - User prompt for warning message generation (placeholders: `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{reputation}}`) |
+| `ai.content_moderation.warning_prompt.system` | `AI_CONTENT_MODERATION_WARNING_PROMPT_SYSTEM` | string | Warning (System) - System prompt for warning message generation (placeholders: `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}`) |
+| `ai.content_moderation.warning_prompt.user` | `AI_CONTENT_MODERATION_WARNING_PROMPT_USER` | string | Warning (User) - User prompt for warning message generation (placeholders: `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}`) |
 
 ## AI Creative Replies
 
@@ -224,6 +237,10 @@ This file is auto-generated. Do not edit manually.
 |---|---|---|---|
 | `ai.creative_replies.enabled` | `AI_CREATIVE_REPLIES_ENABLED` | bool | Enabled - Enable AI creative replies to user messages |
 | `ai.creative_replies.use_full_model` | `AI_CREATIVE_REPLIES_USE_FULL_MODEL` | bool | Use Full Model - Use full model instead of light for creative replies |
+| `ai.creative_replies.web_search_enabled` | `AI_CREATIVE_REPLIES_WEB_SEARCH_ENABLED` | bool | Web Search - Allow creative-reply models marked 'Use for Web Search' to search when needed through the Responses API. Search adds latency and provider tool charges; failures fall back to ordinary replies. Azure uses Grounding with Bing under separate terms, and data can leave your compliance/geography boundary. Default: off. |
+| `ai.creative_replies.message_tools_enabled` | `AI_CREATIVE_REPLIES_MESSAGE_TOOLS_ENABLED` | bool | Message History Tools - Let creative-reply models query stored messages by user, current topic, literal text, or inclusive time range. Tools are read-only and locked to the current chat, use Responses API function calling, and fall back to ordinary replies if unsupported. Default: off. |
+| `ai.creative_replies.message_tools_max_limit` | `AI_CREATIVE_REPLIES_MESSAGE_TOOLS_MAX_LIMIT` | int | Message Tool Max Results - Maximum messages returned by one history-tool call. Model requests are clamped to this value and an absolute ceiling of 50. Default: 20. |
+| `ai.creative_replies.context_only_current_topic` | `AI_CREATIVE_REPLIES_CONTEXT_ONLY_CURRENT_TOPIC` | bool | Current Topic Context Only - Restrict all creative-reply message context to the triggering message's topic/thread, including reply chains, recent and per-user history, adjacent messages, and message-history tools. Default: on. |
 | `ai.creative_replies.max_messages` | `AI_CREATIVE_REPLIES_MAX_MESSAGES` | int | Max Messages - Max creative replies per time window (default: 3) |
 | `ai.creative_replies.time_window` | `AI_CREATIVE_REPLIES_TIME_WINDOW` | int | Time Window (hours) - Time window in hours for rate limiting (default: 3) |
 | `ai.creative_replies.included_topics` | `AI_CREATIVE_REPLIES_INCLUDED_TOPICS` | []chat_topic | Included Topics - (chat, topic) pairs where creative replies are allowed. Empty = every moderation chat / any topic. Use 'Any topic' to enable a whole chat, or 'Main only' for the main area. |
@@ -336,11 +353,12 @@ This file is auto-generated. Do not edit manually.
 |---|---|---|---|
 | `ai.user_profiles.enabled` | `AI_USER_PROFILES_ENABLED` | bool | Enabled - Enable daily AI-generated user behavior profiles |
 | `ai.user_profiles.time` | `AI_USER_PROFILES_TIME` | string | Time - Time of day to run the AI user-profile update task (HH:MM) |
-| `ai.user_profiles.prompt.system` | `AI_USER_PROFILES_PROMPT_SYSTEM` | string | New Profile (System) - System prompt for generating new user profiles (placeholders: `{{username}}`, `{{messages}}`) |
-| `ai.user_profiles.prompt.user` | `AI_USER_PROFILES_PROMPT_USER` | string | New Profile (User) - User prompt for generating new user profiles (placeholders: `{{username}}`, `{{messages}}`) |
-| `ai.user_profiles.update_prompt.system` | `AI_USER_PROFILES_UPDATE_PROMPT_SYSTEM` | string | Update Profile (System) - System prompt for updating existing user profiles (placeholders: `{{username}}`, `{{messages}}`, `{{existing_profile}}`) |
-| `ai.user_profiles.update_prompt.user` | `AI_USER_PROFILES_UPDATE_PROMPT_USER` | string | Update Profile (User) - User prompt for updating existing user profiles (placeholders: `{{username}}`, `{{messages}}`, `{{existing_profile}}`) |
+| `ai.user_profiles.prompt.system` | `AI_USER_PROFILES_PROMPT_SYSTEM` | string | New Profile (System) - System prompt for generating new user profiles (placeholders: `{{username}}`, `{{messages}}`, `{{previous_days_messages}}`) |
+| `ai.user_profiles.prompt.user` | `AI_USER_PROFILES_PROMPT_USER` | string | New Profile (User) - User prompt for generating new user profiles (placeholders: `{{username}}`, `{{messages}}`, `{{previous_days_messages}}`) |
+| `ai.user_profiles.update_prompt.system` | `AI_USER_PROFILES_UPDATE_PROMPT_SYSTEM` | string | Update Profile (System) - System prompt for updating existing user profiles (placeholders: `{{username}}`, `{{messages}}`, `{{existing_profile}}`, `{{previous_days_messages}}`) |
+| `ai.user_profiles.update_prompt.user` | `AI_USER_PROFILES_UPDATE_PROMPT_USER` | string | Update Profile (User) - User prompt for updating existing user profiles (placeholders: `{{username}}`, `{{messages}}`, `{{existing_profile}}`, `{{previous_days_messages}}`) |
 | `ai.user_profiles.skip_forever_muted_users` | `AI_USER_PROFILES_SKIP_FOREVER_MUTED_USERS` | bool | Skip Forever-Muted Users - Don't build or update AI profiles for permanently muted users |
+| `ai.user_profiles.previous_days_messages_count` | `AI_USER_PROFILES_PREVIOUS_DAYS_MESSAGES_COUNT` | int | Previous-Days Messages - How many older messages (from before the current analysis window) to include via the {{previous_days_messages}} placeholder; 0 = default 10 |
 
 ## User Profiles (Tracking)
 
@@ -348,4 +366,68 @@ This file is auto-generated. Do not edit manually.
 |---|---|---|---|
 | `user_profiles.enabled` | `USER_PROFILES_ENABLED` | bool | Enabled - Track username/display-name history, first-seen-per-chat timestamps, and per-day message counts (independent from AI profiles) |
 | `user_profiles.disable_username_reuse_alerts` | `USER_PROFILES_DISABLE_USERNAME_REUSE_ALERTS` | bool | Disable Username-Reuse Alerts - Suppress the admin-chat notification fired when a new user_id appears with a @username previously held by a different user_id (tracking still runs) |
+
+## Reputation
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `reputation.enabled` | `REPUTATION_ENABLED` | bool | Enabled - Enable event-based, chat-local reputation scoring (default: on) |
+| `reputation.ai_profile_affects_score` | `REPUTATION_AI_PROFILE_AFFECTS_SCORE` | bool | AI Profile Affects Score - Include the stored AI behavior-profile verdict in event-based reputation scores (default: on) |
+| `reputation.positive_reaction_emojis` | `REPUTATION_POSITIVE_REACTION_EMOJIS` | []string | Positive Reaction Emojis - Reactions that add community reputation |
+| `reputation.negative_reaction_emojis` | `REPUTATION_NEGATIVE_REACTION_EMOJIS` | []string | Negative Reaction Emojis - Reactions that deduct community reputation |
+| `reputation.clean_messages_per_point` | `REPUTATION_CLEAN_MESSAGES_PER_POINT` | int | Clean Messages Per Point - Trigger-free messages required for one recovery event |
+| `reputation.clean_messages_daily_max` | `REPUTATION_CLEAN_MESSAGES_DAILY_MAX` | int | Daily Clean-Message Cap - Maximum messages per day that can advance recovery |
+
+## Reputation - Weights
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `reputation.weights.positive_reaction` | `REPUTATION_WEIGHTS_POSITIVE_REACTION` | float64 | Positive Reaction Weight - Points per positive reaction before the per-message cap |
+| `reputation.weights.negative_reaction` | `REPUTATION_WEIGHTS_NEGATIVE_REACTION` | float64 | Negative Reaction Weight - Points per negative reaction before the per-message cap |
+| `reputation.weights.delete` | `REPUTATION_WEIGHTS_DELETE` | float64 | Delete Weight - Penalty for a confirmed message deletion |
+| `reputation.weights.warning` | `REPUTATION_WEIGHTS_WARNING` | float64 | Warning Weight - Penalty for a confirmed warning |
+| `reputation.weights.short_mute` | `REPUTATION_WEIGHTS_SHORT_MUTE` | float64 | Short Mute Weight - Penalty for a mute shorter than 24 hours |
+| `reputation.weights.long_mute` | `REPUTATION_WEIGHTS_LONG_MUTE` | float64 | Long Mute Weight - Penalty for a mute of at least 24 hours |
+| `reputation.weights.permanent_mute` | `REPUTATION_WEIGHTS_PERMANENT_MUTE` | float64 | Permanent Mute Weight - Penalty for a permanent mute |
+| `reputation.weights.clean_recovery` | `REPUTATION_WEIGHTS_CLEAN_RECOVERY` | float64 | Clean Recovery Weight - Recovery earned per clean-message interval; never raises score above neutral |
+| `reputation.weights.profile_screening_text` | `REPUTATION_WEIGHTS_PROFILE_SCREENING_TEXT` | float64 | Profile Screening Text Weight - Persistent global adjustment per suspicious Telegram profile text finding |
+| `reputation.weights.profile_screening_photo` | `REPUTATION_WEIGHTS_PROFILE_SCREENING_PHOTO` | float64 | Profile Screening Photo Weight - Persistent global adjustment per Content Safety profile/channel photo finding |
+| `reputation.weights.ai_very_bad` | `REPUTATION_WEIGHTS_AI_VERY_BAD` | float64 | AI Very Bad Weight - Weak adjustment when the AI behavior profile says very_bad |
+| `reputation.weights.ai_bad` | `REPUTATION_WEIGHTS_AI_BAD` | float64 | AI Bad Weight - Weak adjustment when the AI behavior profile says bad |
+| `reputation.weights.ai_neutral` | `REPUTATION_WEIGHTS_AI_NEUTRAL` | float64 | AI Neutral Weight - Adjustment when the AI behavior profile says neutral |
+| `reputation.weights.ai_good` | `REPUTATION_WEIGHTS_AI_GOOD` | float64 | AI Good Weight - Weak adjustment when the AI behavior profile says good |
+| `reputation.weights.ai_very_good` | `REPUTATION_WEIGHTS_AI_VERY_GOOD` | float64 | AI Very Good Weight - Weak adjustment when the AI behavior profile says very_good |
+
+## Reputation - Half-Lives
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `reputation.half_life_days.reaction` | `REPUTATION_HALF_LIFE_DAYS_REACTION` | float64 | Reaction Half-Life - Days until reaction evidence loses half its effect; 0 disables decay |
+| `reputation.half_life_days.delete` | `REPUTATION_HALF_LIFE_DAYS_DELETE` | float64 | Delete Half-Life - Days until delete evidence loses half its effect; 0 disables decay |
+| `reputation.half_life_days.warning` | `REPUTATION_HALF_LIFE_DAYS_WARNING` | float64 | Warning Half-Life - Days until warning evidence loses half its effect; 0 disables decay |
+| `reputation.half_life_days.mute` | `REPUTATION_HALF_LIFE_DAYS_MUTE` | float64 | Mute Half-Life - Days until mute evidence loses half its effect; 0 disables decay |
+| `reputation.half_life_days.ai` | `REPUTATION_HALF_LIFE_DAYS_AI` | float64 | AI Half-Life - Days until the current AI assessment loses half its effect; 0 disables decay |
+
+## Reputation - Limits
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `reputation.limits.min_score` | `REPUTATION_LIMITS_MIN_SCORE` | float64 | Minimum Score - Lower bound for the final score |
+| `reputation.limits.max_score` | `REPUTATION_LIMITS_MAX_SCORE` | float64 | Maximum Score - Upper bound for the final score |
+| `reputation.limits.community_min` | `REPUTATION_LIMITS_COMMUNITY_MIN` | float64 | Community Minimum - Lower bound for all reaction evidence combined |
+| `reputation.limits.community_max` | `REPUTATION_LIMITS_COMMUNITY_MAX` | float64 | Community Maximum - Upper bound for all reaction evidence combined |
+| `reputation.limits.ai_min` | `REPUTATION_LIMITS_AI_MIN` | float64 | AI Minimum - Lower bound for AI profile evidence |
+| `reputation.limits.ai_max` | `REPUTATION_LIMITS_AI_MAX` | float64 | AI Maximum - Upper bound for AI profile evidence |
+| `reputation.limits.profile_screening_min` | `REPUTATION_LIMITS_PROFILE_SCREENING_MIN` | float64 | Profile Screening Minimum - Lower bound for persistent Telegram profile-screening evidence |
+| `reputation.limits.recovery_max` | `REPUTATION_LIMITS_RECOVERY_MAX` | float64 | Recovery Maximum - Maximum clean-behavior recovery points |
+| `reputation.limits.reaction_per_message` | `REPUTATION_LIMITS_REACTION_PER_MESSAGE` | float64 | Reaction Per-Message Cap - Maximum absolute points one message can receive from each reaction polarity |
+
+## Reputation - Thresholds
+
+| YAML Key | ENV | Type | Description |
+|---|---|---|---|
+| `reputation.thresholds.very_bad` | `REPUTATION_THRESHOLDS_VERY_BAD` | float64 | Very Bad Threshold - Scores at or below this value are very_bad |
+| `reputation.thresholds.bad` | `REPUTATION_THRESHOLDS_BAD` | float64 | Bad Threshold - Scores below this value are bad |
+| `reputation.thresholds.good` | `REPUTATION_THRESHOLDS_GOOD` | float64 | Good Threshold - Scores above this value are good |
+| `reputation.thresholds.very_good` | `REPUTATION_THRESHOLDS_VERY_GOOD` | float64 | Very Good Threshold - Scores at or above this value are very_good |
 

@@ -264,6 +264,16 @@
     line-height: 1.6;
 }
 
+.diag-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+}
+
+.diag-actions .test-btn {
+    margin-top: .6rem;
+}
+
 .test-btn {
     margin-top: .6rem;
     padding: .35rem .9rem;

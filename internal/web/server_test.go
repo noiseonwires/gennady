@@ -109,6 +109,15 @@ func TestServeMux_StaticIndex(t *testing.T) {
 	rr := httptest.NewRecorder()
 	ws.Mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/", nil))
 	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "no-store, max-age=0", rr.Header().Get("Cache-Control"))
+}
+
+func TestServeMux_StaticAssetIsNotCached(t *testing.T) {
+	ws := newTestServer(t)
+	rr := httptest.NewRecorder()
+	ws.Mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/js/page-logs-system.js", nil))
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "no-store, max-age=0", rr.Header().Get("Cache-Control"))
 }
 
 func TestServeMux_StaticSPAFallback(t *testing.T) {
@@ -232,6 +241,10 @@ func (m *mockAPITester) TestExternalAPI(service string) (int, time.Duration, str
 func (m *mockAPITester) DebugModerationPrompt(serviceKey, message string) (string, string, string, error) {
 	m.lastService = serviceKey
 	return "sys", "usr", "resp", m.debugErr
+}
+func (m *mockAPITester) DebugCreativeReply(serviceKey, message string, chatID int64, topicID int) (string, string, string, map[string]any, error) {
+	m.lastService = serviceKey
+	return "creative sys", "creative usr", "creative resp", map[string]any{"web_search_used": true}, m.debugErr
 }
 func (m *mockAPITester) DebugModerationByMessageID(serviceKey string, messageID int, chatID int64) (string, string, string, map[string]any, error) {
 	m.lastService = serviceKey

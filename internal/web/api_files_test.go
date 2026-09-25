@@ -4,6 +4,7 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,7 +19,7 @@ import (
 	"gennadium/internal/config"
 	"gennadium/internal/database"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // These tests exercise the operator-facing dump/restore endpoints end to end
@@ -44,6 +45,7 @@ func newFileHandler(t *testing.T) *apiHandler {
 		db:         db,
 		auth:       NewAuthManager(db),
 		pathPrefix: "/admin",
+		operations: newOperationStore(),
 		configFile: filepath.Join(dir, "config.yaml"),
 	}
 }
@@ -275,8 +277,8 @@ func TestCloneDB_RemoteConfiguredButLocalActive_ReachesRemote(t *testing.T) {
 	// When the active database is local but a remote is configured (URL + auth
 	// token), the clone tools are available: the handler no longer refuses with
 	// clone_requires_remote and instead tries to reach the configured remote.
-	// With an unreachable remote it surfaces clone_remote_connect_failed, which
-	// proves the request got past the availability guard.
+	// With an unreachable remote the request is accepted immediately and the
+	// asynchronous operation eventually records clone_remote_connect_failed.
 	h := newFileHandler(t)
 	h.config.Database.URL = "libsql://nonexistent.invalid"
 	h.config.Database.AuthToken = "test-token"
@@ -288,9 +290,20 @@ func TestCloneDB_RemoteConfiguredButLocalActive_ReachesRemote(t *testing.T) {
 	for path, fn := range cases {
 		rr := httptest.NewRecorder()
 		fn(rr, httptest.NewRequest(http.MethodPost, path, nil))
-		assert.Equal(t, http.StatusBadGateway, rr.Code, path)
-		body := decodeErrBody(t, rr)
-		assert.Equal(t, errCloneRemoteConnectFailed.code, body["error_code"], path)
+		require.Equal(t, http.StatusAccepted, rr.Code, path)
+
+		var started operation
+		require.NoError(t, json.NewDecoder(rr.Body).Decode(&started))
+		require.NotEmpty(t, started.ID)
+		require.Eventually(t, func() bool {
+			completed, ok := h.operations.get(started.ID)
+			return ok && completed.Status != operationRunning
+		}, 10*time.Second, 10*time.Millisecond)
+
+		completed, ok := h.operations.get(started.ID)
+		require.True(t, ok)
+		assert.Equal(t, operationFailed, completed.Status)
+		assert.Equal(t, errCloneRemoteConnectFailed.code, completed.ErrorCode)
 	}
 }
 

@@ -36,7 +36,7 @@ import (
 	"gennadium/internal/config"
 	"gennadium/internal/database"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // redactedConfigValue is the sentinel returned in place of sensitive config
@@ -53,6 +53,9 @@ type ExternalAPITester interface {
 	// "openai_full:deployment") and returns the rendered system prompt, user
 	// prompt and raw model response.
 	DebugModerationPrompt(serviceKey, message string) (systemPrompt, userPrompt, response string, err error)
+	// DebugCreativeReply renders and runs the configured creative-reply prompt
+	// against one model. Details includes web-search/tool metadata when available.
+	DebugCreativeReply(serviceKey, message string, chatID int64, topicID int) (systemPrompt, userPrompt, response string, details map[string]any, err error)
 	// DebugModerationByMessageID looks up a stored message by its Telegram
 	// message ID (chatID may be 0 to search across all chats) and renders the
 	// moderation prompt exactly as the live pipeline would - rebuilding the user
@@ -124,6 +127,7 @@ type apiHandler struct {
 	restartFunc         func(mode string)       // called to restart the bot process
 	sendOTP             func(code string) error // sends OTP to super-admin via Telegram
 	logBuffer           *LogBuffer
+	operations          *operationStore
 	startedAt           time.Time
 	version             string
 	gitCommit           string

@@ -70,7 +70,13 @@ func (rt *redirectTransport) RoundTrip(req *http.Request) (*http.Response, error
 		out.Body = io.NopCloser(strings.NewReader(rec.Body))
 		out.ContentLength = int64(len(rec.Body))
 	}
-	return http.DefaultTransport.RoundTrip(out)
+	resp, err := http.DefaultTransport.RoundTrip(out)
+	if resp != nil {
+		// The rewrite is an implementation detail of this test transport, not an
+		// HTTP redirect. Preserve the URL the application actually requested.
+		resp.Request = req
+	}
+	return resp, err
 }
 
 func (rt *redirectTransport) count() int {

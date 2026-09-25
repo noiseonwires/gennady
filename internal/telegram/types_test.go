@@ -48,3 +48,39 @@ func TestParseModeConstants(t *testing.T) {
 	assert.Equal(t, "MarkdownV2", ParseModeMarkdownV2)
 	assert.Equal(t, "HTML", ParseModeHTML)
 }
+
+func TestMessageTextWithEntityLinks(t *testing.T) {
+	t.Run("text link", func(t *testing.T) {
+		msg := &Message{
+			Text: "Article title",
+			Entities: []MessageEntity{
+				{Type: "text_link", Offset: 0, Length: 13, URL: "https://example.com/article"},
+			},
+		}
+
+		assert.Equal(t, "Article title\nhttps://example.com/article", msg.TextWithEntityLinks())
+	})
+
+	t.Run("caption links are deduplicated", func(t *testing.T) {
+		msg := &Message{
+			Caption: "Read more",
+			CaptionEntities: []MessageEntity{
+				{Type: "text_link", URL: "https://example.com/article"},
+				{Type: "text_link", URL: "https://example.com/article"},
+			},
+		}
+
+		assert.Equal(t, "Read more\nhttps://example.com/article", msg.TextWithEntityLinks())
+	})
+
+	t.Run("visible URL is not appended", func(t *testing.T) {
+		msg := &Message{
+			Text: "https://example.com/article",
+			Entities: []MessageEntity{
+				{Type: "text_link", URL: "https://example.com/article"},
+			},
+		}
+
+		assert.Equal(t, msg.Text, msg.TextWithEntityLinks())
+	})
+}

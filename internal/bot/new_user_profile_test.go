@@ -218,6 +218,9 @@ func TestRecordUserProfileFinding_StoresInTgProfileAnalysis(t *testing.T) {
 	require.NotNil(t, prof)
 	assert.Contains(t, prof.TgProfileAnalysis, "looks like spam")
 	assert.Equal(t, "", prof.Profile)
+	score, err := b.reputationScore(7, -100)
+	require.NoError(t, err)
+	assert.InDelta(t, -2, score.Score, 0.001)
 }
 
 // --- screening result surfacing into moderation prompts -----------------------
@@ -235,7 +238,7 @@ func TestSuspiciousProfileSurfacedInModerationBlocks(t *testing.T) {
 	assert.Contains(t, full, "Photo flagged")
 
 	// Compact {{user_reputation}} block surfaces the findings too.
-	compact := b.getUserReputationForModeration(7)
+	compact := b.getUserReputationForModeration(7, -100)
 	assert.Contains(t, compact, "Spam: crypto promo")
 	assert.Contains(t, compact, "Photo flagged")
 }
@@ -244,7 +247,7 @@ func TestSuspiciousProfileSurfacedInModerationBlocks(t *testing.T) {
 func TestGetUserReputationForModeration_EmptyWhenNoProfile(t *testing.T) {
 	b, _ := newMockBot(t)
 	b.config.AI.ContentModeration.NewUserProfileCheckEnabled = true
-	assert.Equal(t, "", b.getUserReputationForModeration(123))
+	assert.Contains(t, b.getUserReputationForModeration(123, -100), "score 0.0")
 }
 
 // --- new-user marker + {{new_user_rules}} placeholder ------------------------
@@ -266,12 +269,12 @@ func TestNewUserMarkerInModerationBlocks(t *testing.T) {
 	// Recent first-seen → user counts as new; marker shows in both blocks.
 	recordFirstSeen(t, b, 7, -100, time.Now().Add(-1*time.Hour))
 	assert.Contains(t, b.getUserProfileForModeration(7, -100), i18n.T("mod.user_new"))
-	assert.Contains(t, b.getUserReputationForModeration(7), i18n.T("mod.user_new"))
+	assert.Contains(t, b.getUserReputationForModeration(7, -100), i18n.T("mod.user_new"))
 
 	// First-seen beyond the default 24h window → not new; marker absent.
 	recordFirstSeen(t, b, 8, -100, time.Now().Add(-48*time.Hour))
 	assert.NotContains(t, b.getUserProfileForModeration(8, -100), i18n.T("mod.user_new"))
-	assert.Equal(t, "", b.getUserReputationForModeration(8))
+	assert.NotContains(t, b.getUserReputationForModeration(8, -100), i18n.T("mod.user_new"))
 }
 
 func TestIsNewUserRespectsConfiguredWindow(t *testing.T) {

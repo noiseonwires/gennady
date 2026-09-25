@@ -161,6 +161,7 @@ var (
 // System
 var (
 	errRestartUnavailable = webError{code: "system.restart_unavailable", msg: "restart not available", status: http.StatusServiceUnavailable}
+	errOperationNotFound  = webError{code: "system.operation_not_found", msg: "operation not found", status: http.StatusNotFound}
 )
 
 // ── Helpers ──────────────────────────────────────────────────────────────

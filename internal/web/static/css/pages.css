@@ -622,6 +622,41 @@
     padding: .75rem;
     border: 1px solid var(--border);
 }
+.diag-debug-meta {
+    display: grid;
+    gap: .25rem;
+    font-family: inherit;
+}
+.diag-debug-section {
+    margin-top: .75rem;
+}
+.diag-debug-section-title {
+    color: var(--text2);
+    font-size: .85rem;
+}
+.diag-debug-item {
+    font-family: inherit;
+}
+.diag-debug-item summary {
+    cursor: pointer;
+    color: var(--accent2);
+}
+.diag-debug-item pre {
+    margin: .35rem 0 .75rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: .78rem;
+}
+.diag-debug-links {
+    display: grid;
+    gap: .4rem;
+    font-family: inherit;
+}
+.diag-debug-links a {
+    color: var(--accent2);
+    overflow-wrap: anywhere;
+}
 .msg-popup-reason {
     margin-top: .85rem;
 }

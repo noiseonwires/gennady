@@ -621,8 +621,8 @@ func (db *DB) RecordIncomingMessage(info *MessageInfo, opts IncomingMessageOpts)
 		// volatile message content and leaves those annotations untouched.
 		if _, err := tx.Exec(
 			`INSERT INTO message_info
-			 (message_id, chat_id, user_id, username, text, reply_to_message_id, timestamp, extra_info, message_thread_id, quote_text, reactions, moderation_reason)
-			 VALUES (?, ?, ?, ?, ?, ?, datetime(?), ?, ?, ?, ?, ?)
+			 (message_id, chat_id, user_id, username, text, reply_to_message_id, timestamp, extra_info, message_thread_id, quote_text, reactions, moderation_reason, media_group_id)
+			 VALUES (?, ?, ?, ?, ?, ?, datetime(?), ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(message_id, chat_id) DO UPDATE SET
 			     user_id = excluded.user_id,
 			     username = excluded.username,
@@ -630,9 +630,10 @@ func (db *DB) RecordIncomingMessage(info *MessageInfo, opts IncomingMessageOpts)
 			     reply_to_message_id = excluded.reply_to_message_id,
 			     timestamp = excluded.timestamp,
 			     message_thread_id = excluded.message_thread_id,
-			     quote_text = excluded.quote_text`,
+			     quote_text = excluded.quote_text,
+			     media_group_id = excluded.media_group_id`,
 			info.MessageID, info.ChatID, info.UserID, info.Username, info.Text,
-			info.ReplyToMessageID, info.Timestamp.Format(time.RFC3339), info.ExtraInfo, info.MessageThreadID, info.QuoteText, info.Reactions, info.ModerationReason,
+			info.ReplyToMessageID, info.Timestamp.Format(time.RFC3339), info.ExtraInfo, info.MessageThreadID, info.QuoteText, info.Reactions, info.ModerationReason, info.MediaGroupID,
 		); err != nil {
 			return err
 		}
@@ -749,8 +750,8 @@ func (db *DB) StoreMessageInfo(info *MessageInfo) error {
 	// (moderation_reason, reactions, extra_info) that are written separately
 	// after the initial insert. See RecordIncomingMessage for the full rationale.
 	query := `INSERT INTO message_info 
-		(message_id, chat_id, user_id, username, text, reply_to_message_id, timestamp, extra_info, message_thread_id, quote_text, reactions, moderation_reason) 
-		VALUES (?, ?, ?, ?, ?, ?, datetime(?), ?, ?, ?, ?, ?)
+		(message_id, chat_id, user_id, username, text, reply_to_message_id, timestamp, extra_info, message_thread_id, quote_text, reactions, moderation_reason, media_group_id) 
+		VALUES (?, ?, ?, ?, ?, ?, datetime(?), ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(message_id, chat_id) DO UPDATE SET
 			user_id = excluded.user_id,
 			username = excluded.username,
@@ -758,11 +759,12 @@ func (db *DB) StoreMessageInfo(info *MessageInfo) error {
 			reply_to_message_id = excluded.reply_to_message_id,
 			timestamp = excluded.timestamp,
 			message_thread_id = excluded.message_thread_id,
-			quote_text = excluded.quote_text`
+			quote_text = excluded.quote_text,
+			media_group_id = excluded.media_group_id`
 
 	return db.retryOnTransientError(func() error {
 		_, err := db.conn.Exec(query, info.MessageID, info.ChatID, info.UserID,
-			info.Username, info.Text, info.ReplyToMessageID, info.Timestamp.Format(time.RFC3339), info.ExtraInfo, info.MessageThreadID, info.QuoteText, info.Reactions, info.ModerationReason)
+			info.Username, info.Text, info.ReplyToMessageID, info.Timestamp.Format(time.RFC3339), info.ExtraInfo, info.MessageThreadID, info.QuoteText, info.Reactions, info.ModerationReason, info.MediaGroupID)
 		return err
 	}, "store message info")
 }
@@ -841,6 +843,34 @@ func (db *DB) GetMessageInfo(messageID int, chatID int64) (*MessageInfo, error) 
 	}
 
 	return &info, nil
+}
+
+// GetAlbumSiblingIDs returns the message ids of the *other* items of the
+// Telegram album (media group) that (messageID, chatID) belongs to, ordered by
+// message id. Telegram delivers an album as one message per item sharing a
+// media_group_id, so an album must be treated as a single logical post. Returns
+// nil when the message is standalone or unknown.
+func (db *DB) GetAlbumSiblingIDs(messageID int, chatID int64) ([]int, error) {
+	query := `SELECT message_id FROM message_info
+		WHERE chat_id = ? AND message_id != ? AND media_group_id != ''
+		  AND media_group_id = (SELECT media_group_id FROM message_info WHERE message_id = ? AND chat_id = ?)
+		ORDER BY message_id`
+
+	rows, err := db.conn.Query(query, chatID, messageID, messageID, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // FindMessageByID retrieves the most recently stored message with the given
@@ -997,6 +1027,116 @@ type MessageInfoEnriched struct {
 	TgProfileAnalysis string `json:"tg_profile_analysis,omitempty"`
 }
 
+const (
+	MaxAIMessageSearchLimit  = 50
+	MaxAIMessageSearchOffset = 10000
+)
+
+// AIMessageSearchOptions describes a bounded message-history query used by AI
+// tools. ChatID is always required by callers so tools cannot cross chat
+// boundaries. A nil TopicID searches every topic in that chat; non-nil locks
+// the query to one topic (0 is the main area).
+type AIMessageSearchOptions struct {
+	ChatID       int64
+	TopicID      *int
+	UserID       *int64
+	UserName     string
+	TextContains string
+	From         *time.Time
+	To           *time.Time
+	Limit        int
+	Offset       int
+}
+
+func escapeLikeLiteral(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	return strings.ReplaceAll(value, `_`, `\_`)
+}
+
+// SearchMessagesForAI reuses the Web UI's parameterized filters and enriched
+// result shape, adding topic, literal text and inclusive time bounds. Results
+// are newest first. Limit defaults to 20 and is capped at 50; offset is
+// normalized to zero.
+func (db *DB) SearchMessagesForAI(options AIMessageSearchOptions) ([]MessageInfoEnriched, int, error) {
+	if options.ChatID == 0 {
+		return nil, 0, fmt.Errorf("AI message search requires a chat ID")
+	}
+	limit := options.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > MaxAIMessageSearchLimit {
+		limit = MaxAIMessageSearchLimit
+	}
+	offset := options.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > MaxAIMessageSearchOffset {
+		offset = MaxAIMessageSearchOffset
+	}
+
+	where, args := buildMessageFilter(options.ChatID, "")
+	if options.UserID != nil {
+		where = append(where, "m.user_id = ?")
+		args = append(args, *options.UserID)
+	} else if userName := strings.TrimSpace(options.UserName); userName != "" {
+		normalized := strings.ToLower(strings.TrimPrefix(userName, "@"))
+		where = append(where, `(LOWER(LTRIM(COALESCE(m.username, ''), '@')) = ? OR EXISTS (
+			SELECT 1 FROM user_names_history unh
+			WHERE unh.user_id = m.user_id AND (
+				LOWER(LTRIM(TRIM(COALESCE(unh.username, '')), '@')) = ? OR
+				LOWER(TRIM(COALESCE(unh.display_name, ''))) = LOWER(?)
+			)
+		))`)
+		args = append(args, normalized, normalized, userName)
+	}
+	if options.TopicID != nil {
+		where = append(where, "m.message_thread_id = ?")
+		args = append(args, *options.TopicID)
+	}
+	if text := strings.TrimSpace(options.TextContains); text != "" {
+		where = append(where, `LOWER(COALESCE(m.text, '')) LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+strings.ToLower(escapeLikeLiteral(text))+"%")
+	}
+	if options.From != nil {
+		where = append(where, "m.timestamp >= ?")
+		args = append(args, options.From.UTC().Format("2006-01-02 15:04:05"))
+	}
+	if options.To != nil {
+		where = append(where, "m.timestamp <= ?")
+		args = append(args, options.To.UTC().Format("2006-01-02 15:04:05"))
+	}
+
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = " WHERE " + strings.Join(where, " AND ")
+	}
+	var total int
+	if err := db.conn.QueryRow("SELECT COUNT(*) FROM message_info m"+whereSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	query := enrichedMessageSelect + whereSQL + ` ORDER BY m.timestamp DESC, m.message_id DESC LIMIT ? OFFSET ?`
+	queryArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := db.conn.Query(query, queryArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var messages []MessageInfoEnriched
+	for rows.Next() {
+		var message MessageInfoEnriched
+		if err := scanEnrichedMessage(rows, &message); err != nil {
+			return nil, 0, err
+		}
+		messages = append(messages, message)
+	}
+	return messages, total, rows.Err()
+}
+
 // buildMessageFilter turns the Web UI message-list filters into parameterized
 // SQL WHERE fragments (referencing the `message_info m` alias) and their args.
 // chatID == 0 means "all chats"; userFilter == "" means "all authors". A
@@ -1030,7 +1170,7 @@ func buildMessageFilter(chatID int64, userFilter string) ([]string, []any) {
 // ORDER / LIMIT clauses and scan rows with scanEnrichedMessage. The column
 // order is fixed and must stay in sync with scanEnrichedMessage.
 const enrichedMessageSelect = `SELECT m.message_id, m.chat_id, m.user_id, m.username, m.text, m.reply_to_message_id, m.timestamp, m.extra_info,
-		m.message_thread_id, m.quote_text, m.reactions, m.moderation_reason,
+		m.message_thread_id, m.quote_text, m.reactions, m.moderation_reason, m.media_group_id,
 		COALESCE(a.action_type, '') as action_type, COALESCE(a.admin_name, '') as action_admin,
 		COALESCE(up.tg_profile_analysis, '') as tg_profile_analysis
 		FROM message_info m
@@ -1048,7 +1188,7 @@ func scanEnrichedMessage(s rowScanner, m *MessageInfoEnriched) error {
 	var tsStr string
 	if err := s.Scan(&m.MessageID, &m.ChatID, &m.UserID, &m.Username,
 		&m.Text, &m.ReplyToMessageID, &tsStr, &m.ExtraInfo,
-		&m.MessageThreadID, &m.QuoteText, &m.Reactions, &m.ModerationReason,
+		&m.MessageThreadID, &m.QuoteText, &m.Reactions, &m.ModerationReason, &m.MediaGroupID,
 		&m.ActionType, &m.ActionAdmin, &m.TgProfileAnalysis); err != nil {
 		return err
 	}
@@ -1167,13 +1307,28 @@ func (db *DB) IsMessageInDeletionQueue(messageID int, chatID int64) (bool, error
 
 // GetRecentUserMessages returns the last N messages for a specific user in a chat from message_info within the specified hours
 func (db *DB) GetRecentUserMessages(userID int64, chatID int64, limit int, hoursBack int) ([]string, error) {
+	return db.getRecentUserMessages(userID, chatID, nil, limit, hoursBack)
+}
+
+// GetRecentUserMessagesInTopic returns recent user messages restricted to one topic.
+func (db *DB) GetRecentUserMessagesInTopic(userID int64, chatID int64, topicID int, limit int, hoursBack int) ([]string, error) {
+	return db.getRecentUserMessages(userID, chatID, &topicID, limit, hoursBack)
+}
+
+func (db *DB) getRecentUserMessages(userID int64, chatID int64, topicID *int, limit int, hoursBack int) ([]string, error) {
 	query := `SELECT text, reactions FROM message_info 
-		WHERE user_id = ? AND chat_id = ? AND text IS NOT NULL AND text != '' 
-		AND timestamp >= ?
+		WHERE user_id = ? AND chat_id = ?`
+	args := []any{userID, chatID}
+	if topicID != nil {
+		query += ` AND message_thread_id = ?`
+		args = append(args, *topicID)
+	}
+	query += ` AND text IS NOT NULL AND text != '' AND timestamp >= ?
 		ORDER BY timestamp DESC LIMIT ?`
 
 	timeThreshold := time.Now().Add(-time.Duration(hoursBack) * time.Hour)
-	rows, err := db.conn.Query(query, userID, chatID, timeThreshold, limit)
+	args = append(args, timeThreshold, limit)
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1196,6 +1351,15 @@ func (db *DB) GetRecentUserMessages(userID int64, chatID int64, limit int, hours
 // whose message_id falls within [minMsgID, maxMsgID], excluding excludeMsgIDs and
 // messages older than since. Results are ordered by message_id ASC and capped at limit.
 func (db *DB) GetMessagesByUsersInRange(chatID int64, userIDs []int64, minMsgID, maxMsgID int, excludeMsgIDs []int, since time.Time, limit int) ([]MessageInfo, error) {
+	return db.getMessagesByUsersInRange(chatID, nil, userIDs, minMsgID, maxMsgID, excludeMsgIDs, since, limit)
+}
+
+// GetMessagesByUsersInRangeInTopic restricts adjacent messages to one topic.
+func (db *DB) GetMessagesByUsersInRangeInTopic(chatID int64, topicID int, userIDs []int64, minMsgID, maxMsgID int, excludeMsgIDs []int, since time.Time, limit int) ([]MessageInfo, error) {
+	return db.getMessagesByUsersInRange(chatID, &topicID, userIDs, minMsgID, maxMsgID, excludeMsgIDs, since, limit)
+}
+
+func (db *DB) getMessagesByUsersInRange(chatID int64, topicID *int, userIDs []int64, minMsgID, maxMsgID int, excludeMsgIDs []int, since time.Time, limit int) ([]MessageInfo, error) {
 	if len(userIDs) == 0 || limit <= 0 || minMsgID > maxMsgID {
 		return nil, nil
 	}
@@ -1205,13 +1369,18 @@ func (db *DB) GetMessagesByUsersInRange(chatID int64, userIDs []int64, minMsgID,
 
 	query := `SELECT message_id, chat_id, user_id, username, text, reply_to_message_id, timestamp, extra_info, reactions
 		FROM message_info
-		WHERE chat_id = ? AND user_id IN (` + userPlaceholders + `)
+		WHERE chat_id = ?`
+	args := make([]interface{}, 0, len(userIDs)+6+len(excludeMsgIDs))
+	args = append(args, chatID)
+	if topicID != nil {
+		query += ` AND message_thread_id = ?`
+		args = append(args, *topicID)
+	}
+	query += ` AND user_id IN (` + userPlaceholders + `)
 		AND message_id BETWEEN ? AND ?
 		AND timestamp >= ?
 		AND (text IS NOT NULL AND text != '' OR extra_info IS NOT NULL AND extra_info != '')`
 
-	args := make([]interface{}, 0, len(userIDs)+5+len(excludeMsgIDs))
-	args = append(args, chatID)
 	for _, uid := range userIDs {
 		args = append(args, uid)
 	}
@@ -1549,15 +1718,29 @@ func (db *DB) PerformDatabaseCleanup(messageRetentionHours, warningRetentionHour
 // GetRecentMessagesWithUsernames gets recent messages with usernames for enhanced daily summaries
 // Filters by chatID to ensure chat-specific summaries
 func (db *DB) GetRecentMessagesWithUsernames(chatID int64, hoursBack int, botUserID int64) ([]string, error) {
-	query := `SELECT m.message_id, m.text, m.timestamp, m.username, m.reply_to_message_id, m.chat_id, m.extra_info, m.reactions
+	return db.getRecentMessagesWithUsernames(chatID, nil, hoursBack, botUserID)
+}
+
+// GetRecentMessagesWithUsernamesInTopic restricts recent messages to one topic.
+func (db *DB) GetRecentMessagesWithUsernamesInTopic(chatID int64, topicID int, hoursBack int, botUserID int64) ([]string, error) {
+	return db.getRecentMessagesWithUsernames(chatID, &topicID, hoursBack, botUserID)
+}
+
+func (db *DB) getRecentMessagesWithUsernames(chatID int64, topicID *int, hoursBack int, botUserID int64) ([]string, error) {
+	query := `SELECT m.message_id, m.text, m.timestamp, m.username, m.reply_to_message_id, m.chat_id, m.extra_info, m.reactions, m.media_group_id
 		FROM message_info m
 		WHERE m.timestamp >= ? AND m.text IS NOT NULL AND m.text != ''
-		AND m.user_id != ? AND m.chat_id = ?
-		ORDER BY m.message_id LIMIT 1000`
+		AND m.user_id != ? AND m.chat_id = ?`
 
 	timeThreshold := time.Now().Add(-time.Duration(hoursBack) * time.Hour)
+	args := []any{timeThreshold, botUserID, chatID}
+	if topicID != nil {
+		query += ` AND m.message_thread_id = ?`
+		args = append(args, *topicID)
+	}
+	query += ` ORDER BY m.message_id LIMIT 1000`
 
-	rows, err := db.conn.Query(query, timeThreshold, botUserID, chatID)
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1566,6 +1749,7 @@ func (db *DB) GetRecentMessagesWithUsernames(chatID int64, hoursBack int, botUse
 	var messages []string
 	var firstMessageID *int
 	var lastShownReplyTo *int // Track the last reply target we showed context for
+	lastMediaGroupID := ""    // Album of the previously emitted entry, for folding
 
 	for rows.Next() {
 		var messageID int
@@ -1576,8 +1760,9 @@ func (db *DB) GetRecentMessagesWithUsernames(chatID int64, hoursBack int, botUse
 		var chatID int64
 		var extraInfo *string
 		var reactions string
+		var mediaGroupID string
 
-		err := rows.Scan(&messageID, &messageText, &timestampStr, &username, &replyToMessageID, &chatID, &extraInfo, &reactions)
+		err := rows.Scan(&messageID, &messageText, &timestampStr, &username, &replyToMessageID, &chatID, &extraInfo, &reactions, &mediaGroupID)
 		if err != nil {
 			log.Printf("Error scanning message row: %v", err)
 			continue // Skip problematic rows
@@ -1587,6 +1772,20 @@ func (db *DB) GetRecentMessagesWithUsernames(chatID int64, hoursBack int, botUse
 		if firstMessageID == nil {
 			firstMessageID = &messageID
 		}
+
+		// Telegram delivers an album as one message per item, all sharing a
+		// media_group_id. Fold the follow-up items into the entry emitted for the
+		// first one so the AI sees a single post instead of N fragments.
+		if mediaGroupID != "" && mediaGroupID == lastMediaGroupID && len(messages) > 0 {
+			last := len(messages) - 1
+			messages[last] += " " + messageText
+			if extraInfo != nil && *extraInfo != "" {
+				messages[last] += "\n" + *extraInfo
+			}
+			messages[last] += formatReactionsTag(reactions)
+			continue
+		}
+		lastMediaGroupID = mediaGroupID
 
 		// Parse timestamp - handle both proper datetime and Go's time.Time string format
 		var timestamp time.Time
@@ -1643,10 +1842,15 @@ func (db *DB) GetRecentMessagesWithUsernames(chatID int64, hoursBack int, botUse
 
 			if (isPreviousDay || !isConsecutive) && !isSameAsLastShown {
 				replyQuery := `SELECT text, username, extra_info FROM message_info WHERE message_id = ? AND chat_id = ?`
+				replyArgs := []any{*replyToMessageID, chatID}
+				if topicID != nil {
+					replyQuery += ` AND message_thread_id = ?`
+					replyArgs = append(replyArgs, *topicID)
+				}
 				var replyText string
 				var replyUsername *string
 				var replyExtraInfo *string
-				if err := db.conn.QueryRow(replyQuery, *replyToMessageID, chatID).Scan(&replyText, &replyUsername, &replyExtraInfo); err == nil {
+				if err := db.conn.QueryRow(replyQuery, replyArgs...).Scan(&replyText, &replyUsername, &replyExtraInfo); err == nil {
 					replyContent := composeReplyContext(replyText, replyExtraInfo)
 
 					if replyContent != "" {
@@ -1759,20 +1963,59 @@ func composeReplyContext(text string, extraInfo *string) string {
 	return ""
 }
 
-// GetTableStats returns row counts for all known tables.
+// GetTableStats returns row counts for every application table currently in
+// the database. Discovering the schema keeps diagnostics complete when new
+// tables are introduced, without maintaining a second hardcoded registry.
 func (db *DB) GetTableStats() (map[string]int64, error) {
-	tables := []string{"muted_users", "warnings", "messages_for_deletion", "message_info", "actions", "scheduled_events", "user_profiles", "user_names_history", "user_daily_activity", "token_usage"}
+	rows, err := db.conn.Query(`SELECT name FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	var tables []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		tables = append(tables, table)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	counts := make(map[string]int64, len(tables))
+	if len(tables) == 0 {
+		return counts, nil
+	}
+	parts := make([]string, 0, len(tables))
+	args := make([]any, 0, len(tables))
 	for _, table := range tables {
-		var count int64
-		err := db.conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count)
+		quoted, err := quoteSQLiteIdentifier(table)
 		if err != nil {
-			counts[table] = -1
-			continue
+			return nil, err
+		}
+		parts = append(parts, "SELECT ? AS table_name, COUNT(*) AS row_count FROM "+quoted)
+		args = append(args, table)
+	}
+	countRows, err := db.conn.Query(strings.Join(parts, " UNION ALL "), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer countRows.Close()
+	for countRows.Next() {
+		var table string
+		var count int64
+		if err := countRows.Scan(&table, &count); err != nil {
+			return nil, err
 		}
 		counts[table] = count
 	}
-	return counts, nil
+	return counts, countRows.Err()
 }
 
 // GetActiveMuteCount returns the number of currently active mutes.

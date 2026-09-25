@@ -26,6 +26,8 @@ func TestTableImportStrategy(t *testing.T) {
 	assert.Equal(t, importMergeUserProfiles, tableImportStrategy("user_profiles"))
 	assert.Equal(t, importMergeForumTopics, tableImportStrategy("forum_topics"))
 	assert.Equal(t, importMergeTokenUsage, tableImportStrategy("token_usage"))
+	assert.Equal(t, importMergeReputationEvents, tableImportStrategy("reputation_events"))
+	assert.Equal(t, importMerge, tableImportStrategy("reputation_clean_state"))
 	assert.Equal(t, importReplace, tableImportStrategy("config_values"))
 	assert.Equal(t, importReplace, tableImportStrategy("muted_users"))
 }

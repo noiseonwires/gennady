@@ -34,6 +34,7 @@ type Config struct {
 	WebUI            WebUIConfig               `yaml:"web_ui"`
 	AI               AzureAIConfig             `yaml:"ai"`
 	UserProfiles     UserProfilesGeneralConfig `yaml:"user_profiles"`
+	Reputation       ReputationConfig          `yaml:"reputation"`
 
 	// Topics is an optional, static forum-topic-name registry. The Telegram
 	// Bot API cannot look up topic names by id, so the bot normally learns them
@@ -42,6 +43,66 @@ type Config struct {
 	// appear in moderation reports immediately. Live-observed names take
 	// precedence over these static entries.
 	Topics []TopicNameRef `yaml:"topics"`
+}
+
+// ReputationConfig controls the event-based, chat-local reputation score.
+// Pointer scalars distinguish omitted values from deliberate zeroes.
+type ReputationConfig struct {
+	Enabled                *bool                   `yaml:"enabled"`
+	AIProfileAffectsScore  *bool                   `yaml:"ai_profile_affects_score"`
+	PositiveReactionEmojis []string                `yaml:"positive_reaction_emojis"`
+	NegativeReactionEmojis []string                `yaml:"negative_reaction_emojis"`
+	Weights                ReputationWeightsConfig `yaml:"weights"`
+	HalfLives              ReputationDecayConfig   `yaml:"half_life_days"`
+	Limits                 ReputationLimitsConfig  `yaml:"limits"`
+	Thresholds             ReputationThresholds    `yaml:"thresholds"`
+	CleanMessagesPerPoint  int                     `yaml:"clean_messages_per_point"`
+	CleanMessagesDailyMax  int                     `yaml:"clean_messages_daily_max"`
+}
+
+type ReputationWeightsConfig struct {
+	PositiveReaction      *float64 `yaml:"positive_reaction"`
+	NegativeReaction      *float64 `yaml:"negative_reaction"`
+	Delete                *float64 `yaml:"delete"`
+	Warning               *float64 `yaml:"warning"`
+	ShortMute             *float64 `yaml:"short_mute"`
+	LongMute              *float64 `yaml:"long_mute"`
+	PermanentMute         *float64 `yaml:"permanent_mute"`
+	CleanRecovery         *float64 `yaml:"clean_recovery"`
+	ProfileScreeningText  *float64 `yaml:"profile_screening_text"`
+	ProfileScreeningPhoto *float64 `yaml:"profile_screening_photo"`
+	AIVeryBad             *float64 `yaml:"ai_very_bad"`
+	AIBad                 *float64 `yaml:"ai_bad"`
+	AINeutral             *float64 `yaml:"ai_neutral"`
+	AIGood                *float64 `yaml:"ai_good"`
+	AIVeryGood            *float64 `yaml:"ai_very_good"`
+}
+
+type ReputationDecayConfig struct {
+	Reaction *float64 `yaml:"reaction"`
+	Delete   *float64 `yaml:"delete"`
+	Warning  *float64 `yaml:"warning"`
+	Mute     *float64 `yaml:"mute"`
+	AI       *float64 `yaml:"ai"`
+}
+
+type ReputationLimitsConfig struct {
+	MinScore            *float64 `yaml:"min_score"`
+	MaxScore            *float64 `yaml:"max_score"`
+	CommunityMin        *float64 `yaml:"community_min"`
+	CommunityMax        *float64 `yaml:"community_max"`
+	AIMin               *float64 `yaml:"ai_min"`
+	AIMax               *float64 `yaml:"ai_max"`
+	ProfileScreeningMin *float64 `yaml:"profile_screening_min"`
+	RecoveryMax         *float64 `yaml:"recovery_max"`
+	ReactionPerMessage  *float64 `yaml:"reaction_per_message"`
+}
+
+type ReputationThresholds struct {
+	VeryBad  *float64 `yaml:"very_bad"`
+	Bad      *float64 `yaml:"bad"`
+	Good     *float64 `yaml:"good"`
+	VeryGood *float64 `yaml:"very_good"`
 }
 
 // TopicNameRef maps a specific forum topic (chat + thread id) to a
@@ -121,9 +182,9 @@ type MessageDeletionConfig struct {
 }
 
 // NightModeConfig configures scheduled "quiet hours". While the window is
-// active, every new message in the covered (chat, topic) pairs is deleted on
-// arrival - without being analyzed or stored - and the bot replies to each with
-// a short notice that is itself removed after ReplyDeleteSeconds.
+// active, new messages in the covered (chat, topic) pairs are deleted on
+// arrival unless the sender is exempt - without being analyzed or stored - and
+// the bot replies to each with a short notice removed after ReplyDeleteSeconds.
 type NightModeConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// StartTime / EndTime bound the window in 24-hour "HH:MM" form. When EndTime
@@ -147,9 +208,19 @@ type NightModeConfig struct {
 	// MuteAfterMessages auto-mutes a user until the end of the current night-mode
 	// window once they post MORE than this many messages while the window is
 	// active. 0 (default) disables the auto-mute; messages are still deleted.
-	MuteAfterMessages int           `yaml:"mute_after_messages"`
-	IncludedTopics    ChatTopicList `yaml:"included_topics"`
-	ExcludedTopics    ChatTopicList `yaml:"excluded_topics"`
+	MuteAfterMessages   int                                `yaml:"mute_after_messages"`
+	ReputationExemption NightModeReputationExemptionConfig `yaml:"reputation_exemption"`
+	IncludedTopics      ChatTopicList                      `yaml:"included_topics"`
+	ExcludedTopics      ChatTopicList                      `yaml:"excluded_topics"`
+}
+
+// NightModeReputationExemptionConfig allows sufficiently trusted users to post
+// during quiet hours. Source accepts "score", "ai", or "both"; "both" means
+// every selected reputation system that is globally enabled must pass.
+type NightModeReputationExemptionConfig struct {
+	Enabled      *bool  `yaml:"enabled"`
+	Source       string `yaml:"source"`
+	MinimumGrade string `yaml:"minimum_grade"`
 }
 
 // DatabaseCleanupConfig contains settings for periodic database record purging.
@@ -384,19 +455,34 @@ type ContentModerationConfig struct {
 	// manual moderation by posting the admin decision card. When false, a clean
 	// cross-model verdict ends the complaint silently without bothering the
 	// admins. Defaults to true.
-	ComplaintManualModeration *bool  `yaml:"complaint_manual_moderation"`
-	DefaultMuteMinutes        int    `yaml:"default_mute_minutes"` // duration applied by the "mute" auto-action; 0 = forever
-	VisionEnabled             bool   `yaml:"vision_enabled"`
-	VisionEndpoint            string `yaml:"vision_endpoint"`
-	VisionAPIKey              string `yaml:"vision_api_key" web:"sensitive"`
-	ContentSafetyEnabled      bool   `yaml:"content_safety_enabled"`
-	ContentSafetyEndpoint     string `yaml:"content_safety_endpoint"`
-	ContentSafetyAPIKey       string `yaml:"content_safety_api_key" web:"sensitive"`
+	ComplaintManualModeration *bool `yaml:"complaint_manual_moderation"`
+	DefaultMuteMinutes        int   `yaml:"default_mute_minutes"` // duration applied by the "mute" auto-action; 0 = forever
+	// AdminNotificationDelaySeconds delays admin-chat notifications so another
+	// anti-spam bot has time to remove the message first. After the delay, a
+	// reaction probe verifies that the source message still exists. Defaults to 3.
+	AdminNotificationDelaySeconds int    `yaml:"admin_notification_delay_seconds"`
+	VisionEnabled                 bool   `yaml:"vision_enabled"`
+	VisionEndpoint                string `yaml:"vision_endpoint"`
+	VisionAPIKey                  string `yaml:"vision_api_key" web:"sensitive"`
+	ContentSafetyEnabled          bool   `yaml:"content_safety_enabled"`
+	ContentSafetyEndpoint         string `yaml:"content_safety_endpoint"`
+	ContentSafetyAPIKey           string `yaml:"content_safety_api_key" web:"sensitive"`
+	// AIImageAnalysisEnabled sends images to configured multimodal AI models
+	// before falling back to Azure Vision and OCR.space.
+	AIImageAnalysisEnabled bool       `yaml:"ai_image_analysis_enabled"`
+	AIImageAnalysisPrompt  PromptPair `yaml:"ai_image_analysis_prompt"`
+	// VisionOutsideModeration also runs image analysis (AI / Vision / OCR.space) for
+	// messages in (chat, topic) pairs excluded from AI moderation via
+	// moderation.excluded_topics, so the recorded chat history still carries the
+	// OCR text and description of images. The Content Safety image verdict is
+	// never acted on outside a moderated scope. Off by default; costs one image
+	// API call per photo in excluded chats.
+	VisionOutsideModeration bool `yaml:"vision_outside_moderation"`
 	// NewUserProfileCheckEnabled runs a one-shot screening of a new member's
 	// whole public profile on their first message in a moderation chat: their
 	// name, bio and profile photo, plus their linked personal channel (title,
 	// description, photo) when present. Photos are screened with Azure Content
-	// Safety first and only described via Vision / OCR.space when Content Safety
+	// Safety first and only described via AI / Vision / OCR.space when Content Safety
 	// is unavailable or fails; all the gathered text is judged by the
 	// NewUserProfilePrompt AI prompt. Findings are appended to the user's
 	// profile before AI moderation runs. It does not require content_safety_enabled.
@@ -406,7 +492,7 @@ type ContentModerationConfig struct {
 	// The full model is better at spotting subtle spam/scam/promo cues in a
 	// profile's name, bio and channel text, at a higher per-call cost. Off by
 	// default (uses the light model). Only affects the AI text verdict; photo
-	// screening still goes through Content Safety / Vision / OCR.space.
+	// screening still goes through Content Safety / AI / Vision / OCR.space.
 	NewUserProfileUseFullModel bool       `yaml:"new_user_profile_use_full_model"`
 	NewUserProfilePrompt       PromptPair `yaml:"new_user_profile_prompt"`
 	// NewUserWindowHours defines how long after a user's first observed message
@@ -459,6 +545,10 @@ func (c *ContentModerationConfig) IsComplaintManualModeration() bool {
 type CreativeRepliesConfig struct {
 	Enabled                  bool          `yaml:"enabled"`
 	UseFullModel             bool          `yaml:"use_full_model"`
+	WebSearchEnabled         bool          `yaml:"web_search_enabled"`
+	MessageToolsEnabled      bool          `yaml:"message_tools_enabled"`
+	MessageToolsMaxLimit     int           `yaml:"message_tools_max_limit"`
+	ContextOnlyCurrentTopic  *bool         `yaml:"context_only_current_topic"`
 	MaxMessages              int           `yaml:"max_messages"`
 	TimeWindow               int           `yaml:"time_window"`
 	IncludedTopics           ChatTopicList `yaml:"included_topics"`
@@ -468,6 +558,15 @@ type CreativeRepliesConfig struct {
 	ReplyChainMaxAgeHours    int           `yaml:"reply_chain_max_age_hours"`
 	ReplyChainAdjacentWindow int           `yaml:"reply_chain_adjacent_window"`
 	Prompt                   PromptPair    `yaml:"prompt"`
+}
+
+// IsContextOnlyCurrentTopic reports whether creative-reply context is limited
+// to the triggering topic. It defaults to true when unset.
+func (c *CreativeRepliesConfig) IsContextOnlyCurrentTopic() bool {
+	if c.ContextOnlyCurrentTopic == nil {
+		return true
+	}
+	return *c.ContextOnlyCurrentTopic
 }
 
 // MorningGreetingConfig contains morning greeting settings.
@@ -551,6 +650,11 @@ type UserProfilesConfig struct {
 	// for users who currently have a permanent ("forever") mute in any
 	// moderation chat - there's little value profiling permanently silenced users.
 	SkipForeverMutedUsers bool `yaml:"skip_forever_muted_users"`
+	// PreviousDaysMessagesCount caps how many older messages (sent before the
+	// current analysis window) are injected into the profile prompts via the
+	// {{previous_days_messages}} placeholder. Ignored when neither prompt uses
+	// that placeholder; defaults to 10 when unset.
+	PreviousDaysMessagesCount int `yaml:"previous_days_messages_count"`
 }
 
 // RssConfig contains RSS feed monitoring settings and associated AI prompts.
@@ -602,8 +706,8 @@ func (f *RssFeed) IsSummarizeIfLong() bool {
 // and the diff is handed to the AI, which either describes the change or
 // answers with NoChangesMarker (nothing is posted then).
 type WebsiteWatchConfig struct {
-	UseFullModel        bool          `yaml:"use_full_model"`
-	LightModelThreshold int           `yaml:"light_model_threshold"`
+	UseFullModel        bool `yaml:"use_full_model"`
+	LightModelThreshold int  `yaml:"light_model_threshold"`
 	// MaxContentLength caps the extracted page text (in UTF-8 runes) that is
 	// stored and compared. Defaults to 8192.
 	MaxContentLength int `yaml:"max_content_length"`

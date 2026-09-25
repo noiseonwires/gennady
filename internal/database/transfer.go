@@ -27,6 +27,8 @@ var transferTableNames = []string{
 	"user_profiles",
 	"user_names_history",
 	"user_daily_activity",
+	"reputation_events",
+	"reputation_clean_state",
 	"token_usage",
 	"forum_topics",
 	"moderation_stats",
@@ -39,6 +41,8 @@ var transferTableNames = []string{
 //   - web_sessions: ephemeral web UI auth token hashes that are host/instance
 //     specific. Copying them between databases would leak login sessions across
 //     deployments, and they expire on their own anyway.
+//   - schema_metadata: application-owned migration bookkeeping. The destination
+//     database keeps the version applied by its running binary.
 //   - sqlite_sequence: internal SQLite bookkeeping for AUTOINCREMENT columns,
 //     recreated automatically; it must never be copied verbatim.
 //
@@ -47,6 +51,7 @@ var transferTableNames = []string{
 // added table cannot silently be dropped from backups, clones and migrations -
 // the test fails until the author makes an explicit transfer/exclude decision.
 var transferExcludedTables = map[string]bool{
+	"schema_metadata": true,
 	"web_sessions":    true,
 	"sqlite_sequence": true,
 }
@@ -81,6 +86,9 @@ const (
 	// count on (stat, day_date) conflicts. Per-day counters are monotonic per
 	// source, so MAX is a safe upper bound and keeps re-imports idempotent.
 	importMergeModerationStats
+	// importMergeReputationEvents keeps the newest replaceable evidence snapshot
+	// for each source key.
+	importMergeReputationEvents
 )
 
 // tableImportStrategy returns the import strategy for each table.
@@ -106,6 +114,10 @@ func tableImportStrategy(table string) importStrategy {
 		return importMergeTokenUsage
 	case "moderation_stats":
 		return importMergeModerationStats
+	case "reputation_events":
+		return importMergeReputationEvents
+	case "reputation_clean_state":
+		return importMerge
 	default:
 		return importReplace // config_values, muted_users, website_snapshots
 	}
@@ -249,15 +261,60 @@ func (db *DB) ImportFromLocalFile(localPath string, includeConfig bool) error {
 			if err := mergeModerationStatsTx(localConn, tx); err != nil {
 				return fmt.Errorf("failed to merge moderation_stats: %w", err)
 			}
+
+		case importMergeReputationEvents:
+			if err := mergeReputationEventsTx(localConn, tx); err != nil {
+				return fmt.Errorf("failed to merge reputation_events: %w", err)
+			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit import transaction: %w", err)
 	}
+	if err := db.syncProfileScreeningReputationEvents(); err != nil {
+		return fmt.Errorf("failed to sync profile screening reputation after import: %w", err)
+	}
 
 	log.Printf("Database imported from %s (includeConfig=%v)", localPath, includeConfig)
 	return nil
+}
+
+func mergeReputationEventsTx(src *sql.DB, tx *sql.Tx) error {
+	rows, err := src.Query(`SELECT source_key, user_id, chat_id, kind, component, value,
+		severity, half_life_days, occurred_at, updated_at FROM reputation_events`)
+	if err != nil {
+		return fmt.Errorf("select: %w", err)
+	}
+	defer rows.Close()
+	stmt, err := tx.Prepare(`INSERT INTO reputation_events
+		(source_key, user_id, chat_id, kind, component, value, severity, half_life_days, occurred_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(source_key) DO UPDATE SET
+			user_id=excluded.user_id, chat_id=excluded.chat_id, kind=excluded.kind,
+			component=excluded.component, value=excluded.value, severity=excluded.severity,
+			half_life_days=excluded.half_life_days, occurred_at=excluded.occurred_at,
+			updated_at=excluded.updated_at
+		WHERE excluded.updated_at > reputation_events.updated_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for rows.Next() {
+		var sourceKey, kind, component, occurredAt, updatedAt string
+		var userID, chatID int64
+		var value, halfLifeDays float64
+		var severity int
+		if err := rows.Scan(&sourceKey, &userID, &chatID, &kind, &component, &value,
+			&severity, &halfLifeDays, &occurredAt, &updatedAt); err != nil {
+			return err
+		}
+		if _, err := stmt.Exec(sourceKey, userID, chatID, kind, component, value,
+			severity, halfLifeDays, occurredAt, updatedAt); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // CleanupTempExports removes temporary export files from the given directory.

@@ -64,7 +64,7 @@ func (b *Bot) resolveChatInfo(chatID int64) ChatInfo {
 	if existing, ok := b.chatDir.get(chatID); ok && existing.Resolved {
 		return existing
 	}
-	if b.tgbot == nil {
+	if b.tg == nil {
 		info := ChatInfo{ID: chatID}
 		b.chatDir.put(info)
 		return info
@@ -112,7 +112,7 @@ func (b *Bot) RefreshChatFromUpdate(chat telegram.Chat) {
 // resolveModerationChatsAsync kicks off a background goroutine that pre-warms
 // the directory cache for every moderation chat plus the admin chat.
 func (b *Bot) resolveModerationChatsAsync() {
-	if b.tgbot == nil {
+	if b.tg == nil {
 		return
 	}
 	chats := make([]int64, 0, b.config.Moderation.ChatIDs.Count()+1)

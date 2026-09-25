@@ -152,8 +152,31 @@ function systemPage() {
             } catch { alert('Copy to DB failed'); }
         },
 
+        async runOperation(path) {
+            const startResponse = await api(path, { method: 'POST' });
+            let operation = await startResponse.json();
+            if (!startResponse.ok) return operation;
+
+            let consecutiveErrors = 0;
+            while (operation.status === 'running') {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                try {
+                    const statusResponse = await api(operation.status_url);
+                    const status = await statusResponse.json();
+                    if (!statusResponse.ok) return status;
+                    operation = status;
+                    consecutiveErrors = 0;
+                } catch (e) {
+                    consecutiveErrors++;
+                    if (consecutiveErrors >= 5) throw e;
+                }
+            }
+            return operation;
+        },
+
         // cloneDB performs a server-side full clone of the database between the
-        // live remote DB and a local SQLite file at the configured path.
+        // live remote DB and a local SQLite file. The initial request only
+        // starts the operation; short status requests are polled until it ends.
         // direction: 'to-local' (remote → local file) or 'to-remote' (local file → remote).
         async cloneDB(direction) {
             const confirmKey = direction === 'to-local' ? 'sys_clone_to_local_confirm' : 'sys_clone_to_remote_confirm';
@@ -163,13 +186,12 @@ function systemPage() {
             if (includeConfig) path += '?include_config=1';
             this.cloning = true;
             try {
-                const r = await api(path, { method: 'POST' });
-                const d = await r.json();
-                if (r.ok) {
-                    alert(d.message || Alpine.store('i18n').t('sys_clone_ok'));
+                const operation = await this.runOperation(path);
+                if (operation.status === 'succeeded') {
+                    alert(operation.message || Alpine.store('i18n').t('sys_clone_ok'));
                     this.load();
                 } else {
-                    alert(Alpine.store('i18n').err(d) || Alpine.store('i18n').t('sys_clone_fail'));
+                    alert(Alpine.store('i18n').err(operation) || Alpine.store('i18n').t('sys_clone_fail'));
                 }
             } catch (e) {
                 alert(Alpine.store('i18n').t('sys_clone_fail') + ' ' + (e.message || e));
@@ -178,16 +200,14 @@ function systemPage() {
             }
         },
 
-        // runBackup triggers one immediate run of the configured database backup
-        // (settings live in the "Database Backup" config section).
+        // runBackup starts an asynchronous backup and polls its status.
         async runBackup() {
             if (!confirm(Alpine.store('i18n').t('sys_backup_confirm'))) return;
             this.backingUp = true;
             try {
-                const r = await api('/api/files/db/backup-now', { method: 'POST' });
-                const d = await r.json();
-                if (r.ok) alert(d.message || Alpine.store('i18n').t('sys_backup_ok'));
-                else alert(Alpine.store('i18n').err(d) || Alpine.store('i18n').t('sys_backup_fail'));
+                const operation = await this.runOperation('/api/files/db/backup-now');
+                if (operation.status === 'succeeded') alert(operation.message || Alpine.store('i18n').t('sys_backup_ok'));
+                else alert(Alpine.store('i18n').err(operation) || Alpine.store('i18n').t('sys_backup_fail'));
             } catch (e) {
                 alert(Alpine.store('i18n').t('sys_backup_fail') + ' ' + (e.message || e));
             } finally {

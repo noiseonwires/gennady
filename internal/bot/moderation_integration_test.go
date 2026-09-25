@@ -126,7 +126,7 @@ func TestAutoModerateDelete(t *testing.T) {
 	b.config.Admin.ChatID = -999
 	rule := &config.ModerationRule{Trigger: "мат", Action: "delete", Description: "profanity"}
 
-	b.autoModerateDelete(testMessage(-100, 7, 55, "bad"), "bad", false, rule)
+	b.autoModerateDelete(testMessage(-100, 7, 55, "bad"), "bad", false, rule, true)
 
 	// Message was deleted via the port.
 	require.Len(t, tg.DeletedIDs, 1)
@@ -144,7 +144,7 @@ func TestAutoModerateWarn(t *testing.T) {
 	// No warning prompt -> falls back to static warn text.
 	rule := &config.ModerationRule{Trigger: "мат", Action: "warn", Description: "profanity"}
 
-	b.autoModerateWarn(testMessage(-100, 7, 55, "bad"), "bad", rule)
+	b.autoModerateWarn(testMessage(-100, 7, 55, "bad"), "bad", rule, true)
 
 	// A warning reply was sent to the source chat.
 	require.NotEmpty(t, tg.SentMessages)
@@ -168,7 +168,7 @@ func TestAutoModerateReport(t *testing.T) {
 	b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
 	rule := &config.ModerationRule{Trigger: "спам", Action: "report", Description: "spam"}
 
-	b.autoModerateReport(testMessage(-100, 7, 55, "spammy"), "spammy", false, rule, nil, "AI reasoning")
+	b.autoModerateReport(testMessage(-100, 7, 55, "spammy"), "spammy", false, rule, nil, "AI reasoning", true)
 
 	// A reaction was set and a report card was sent to the admin chat.
 	require.NotEmpty(t, tg.Reactions)
@@ -187,12 +187,12 @@ func TestNotifyAutoAction_RespectsNotifyAdmin(t *testing.T) {
 
 	off := false
 	ruleOff := &config.ModerationRule{Trigger: "x", NotifyAdmin: &off}
-	b.notifyAutoAction(ruleOff, "should not send")
+	b.notifyAutoAction(ruleOff, "should not send", true)
 	assert.Empty(t, tg.SentMessages)
 
 	on := true
 	ruleOn := &config.ModerationRule{Trigger: "x", NotifyAdmin: &on}
-	b.notifyAutoAction(ruleOn, "should send")
+	b.notifyAutoAction(ruleOn, "should send", true)
 	require.Len(t, tg.SentMessages, 1)
 	assert.Equal(t, int64(-999), tg.SentMessages[0].ChatID)
 }

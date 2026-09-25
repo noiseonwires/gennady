@@ -1,0 +1,450 @@
+ok  	gennadium/internal/database	12.752s
+ok  	gennadium/internal/config	3.279s
+ok  	gennadium/internal/bot	31.475s
+2026/08/14 17:21:05 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:05 ✓ Database initialized (provider: local)
+2026/08/14 17:21:05 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:05 ✓ Database initialized (provider: local)
+2026/08/14 17:21:05 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:05 ✓ Database initialized (provider: local)
+2026/08/14 17:21:05 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:05 ✓ Database initialized (provider: local)
+2026/08/14 17:21:05 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:05 ✓ Database initialized (provider: local)
+2026/08/14 17:21:05 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:05 ✓ Database initialized (provider: local)
+2026/08/14 17:21:05 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:05 ✓ Database initialized (provider: local)
+2026/08/14 17:21:05 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:05 ✓ Database initialized (provider: local)
+2026/08/14 17:21:05 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:05 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 Error sending OTP to super-admin: boom
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 WebUI: config updated (1 fields changed)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 WebUI: ignored 1 env-overridden field(s) on save (set via environment, not editable here): language
+2026/08/14 17:21:06 WebUI: config updated (0 fields changed)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 WebUI: RSS feeds updated (0 feeds)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:06 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:06 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 WebUI: watched websites updated (1 sites)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 WebUI: topic names updated (1 topics)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 WebUI: topic names updated (1 topics)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 WebUI: moderation rules updated (1 rules)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:07 WebUI: AI models updated (light=1, full=0)
+2026/08/14 17:21:07 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:07 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 WebUI: chat rules overrides updated (1 entries)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 🌐 Web UI registered at /admin/
+2026/08/14 17:21:08 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:08 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:08 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 WebUI: hard restart requested by admin
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:09 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:09 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+--- FAIL: TestHandleGetProfiles_ReputationScoresRespectOptOut (0.05s)
+    api_data_test.go:363: 
+        	Error Trace:	C:/Users/kovchinnikov/gennady-newgen/internal/web/api_data_test.go:363
+        	Error:      	Not equal: 
+        	            	expected: -5
+        	            	actual  : -4.9999999997453735
+        	Test:       	TestHandleGetProfiles_ReputationScoresRespectOptOut
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 WebUI: config file uploaded
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 WebUI: config uploaded to database (204 values)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 WebUI: config copied to database (204 values)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:10 ✓ Database initialized (provider: local)
+2026/08/14 17:21:10 WebUI: env file uploaded and applied (2 variables)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 Database exported to C:\Users\KOVCHI~1\AppData\Local\Temp\TestUploadDB_RestoresData2566547861\002\moderation_export_2262420139.db (includeConfig=true)
+2026/08/14 17:21:11 Database imported from C:\Users\KOVCHI~1\AppData\Local\Temp\TestUploadDB_RestoresData2566547861\001\moderation_upload_110899038.db (includeConfig=false)
+2026/08/14 17:21:11 WebUI: database imported from uploaded file
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 Database exported to C:\Users\KOVCHI~1\AppData\Local\Temp\TestCloneDB_RemoteConfiguredButLocalActive_ReachesRemote3528409429\001\moderation_export_3861399533.db (includeConfig=false)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 WebUI: ignoring invalid WEB_UI_MAX_DB_UPLOAD_BYTES="not-a-number"; using default 134217728 bytes
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 🌐 Web UI registered at /admin/
+2026/08/14 17:21:11 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:11 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:11 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 API api.internal_error (500): secret detail
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 🌐 Web UI registered at /admin/
+2026/08/14 17:21:12 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 🌐 Web UI registered at /admin/
+2026/08/14 17:21:12 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 🌐 Web UI registered at /admin/
+2026/08/14 17:21:12 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 🌐 Web UI registered at /admin/
+2026/08/14 17:21:12 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 🌐 Web UI registered at /admin/
+2026/08/14 17:21:12 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:12 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:12 ✓ Database initialized (provider: local)
+2026/08/14 17:21:12 🌐 Web UI registered at /admin/
+2026/08/14 17:21:12 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /panel/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ⏰ Scheduled events webhook registered at /trigger-events
+2026/08/14 17:21:13 ⏰ Scheduled events webhook triggered from 192.0.2.1:1234
+2026/08/14 17:21:13 ✓ Mute cache loaded: 0 active mutes
+2026/08/14 17:21:13 ✓ Database initialized (provider: local)
+2026/08/14 17:21:13 🌐 Web UI registered at /admin/
+2026/08/14 17:21:13 🛡️  Moderator Web UI registered at /mod/
+2026/08/14 17:21:13 ⏰ Scheduled events webhook registered at /trigger-events
+FAIL
+FAIL	gennadium/internal/web	15.616s
+FAIL

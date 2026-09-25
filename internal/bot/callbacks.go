@@ -184,21 +184,15 @@ func (b *Bot) handleWarningAction(query *tgbotapi.CallbackQuery, parts []string)
 		}
 	}
 
-	// Resolve reputation for the warning prompt
-	reputation := ""
-	if profile, profileErr := b.db.GetUserProfile(userID); profileErr == nil && profile != nil {
-		reputation = profile.Reputation
-	}
-
 	// Send warning message to user
 	displayName := b.getUserDisplayName(userID)
-	warningText, err := b.generateWarningNotification(displayName, messageText, muteInfoText, reputation, chatID)
+	warningText, err := b.generateWarningNotification(displayName, messageText, muteInfoText, userID, chatID)
 	if err != nil {
 		log.Printf("Error generating AI warning: %v", err)
 		// If content filter triggered and we had message content, retry without it
 		if strings.Contains(err.Error(), "content_filter") && messageText != "" {
 			log.Printf("Content filter triggered during warning generation, retrying without message content")
-			warningText, err = b.generateWarningNotification(displayName, "", muteInfoText, reputation, chatID)
+			warningText, err = b.generateWarningNotification(displayName, "", muteInfoText, userID, chatID)
 			if err != nil {
 				log.Printf("Error generating AI warning without message content: %v", err)
 				warningText = i18n.T("warn.fallback")
@@ -244,7 +238,7 @@ func (b *Bot) handleWarningAction(query *tgbotapi.CallbackQuery, parts []string)
 		Timestamp:  time.Now(),
 	}
 
-	err = b.db.LogAction(action)
+	err = b.logReputationAction(action)
 	if err != nil {
 		log.Printf("Error logging action: %v", err)
 	}
@@ -360,7 +354,7 @@ func (b *Bot) handleMuteAction(query *tgbotapi.CallbackQuery, parts []string) {
 		Timestamp:  time.Now(),
 	}
 
-	err = b.db.LogAction(action)
+	err = b.logReputationAction(action)
 	if err != nil {
 		log.Printf("Error logging action: %v", err)
 	}
@@ -525,7 +519,7 @@ func (b *Bot) handleMuteConfirmed(query *tgbotapi.CallbackQuery, parts []string)
 		Timestamp:  time.Now(),
 	}
 
-	err = b.db.LogAction(action)
+	err = b.logReputationAction(action)
 	if err != nil {
 		log.Printf("Error logging action: %v", err)
 	}
@@ -652,7 +646,7 @@ func (b *Bot) handleUnmuteAction(query *tgbotapi.CallbackQuery, parts []string) 
 		Timestamp:  time.Now(),
 	}
 
-	err = b.db.LogAction(action)
+	err = b.logReputationAction(action)
 	if err != nil {
 		log.Printf("Error logging action: %v", err)
 	}
@@ -1178,6 +1172,7 @@ func (b *Bot) handleDeleteAction(query *tgbotapi.CallbackQuery, parts []string) 
 		log.Printf("Error removing message from deletion queue: %v", err)
 		// Don't return here, continue with logging
 	}
+	b.deleteAlbumSiblings(chatID, messageID)
 
 	adminName := getUserDisplayNameFromUser(query.From)
 
@@ -1195,7 +1190,7 @@ func (b *Bot) handleDeleteAction(query *tgbotapi.CallbackQuery, parts []string) 
 		Timestamp:  time.Now(),
 	}
 
-	err = b.db.LogAction(action)
+	err = b.logReputationAction(action)
 	if err != nil {
 		log.Printf("Error logging action: %v", err)
 	}
@@ -1300,7 +1295,7 @@ func (b *Bot) handleRestoreAction(query *tgbotapi.CallbackQuery, parts []string)
 		Timestamp:  time.Now(),
 	}
 
-	err = b.db.LogAction(action)
+	err = b.logReputationAction(action)
 	if err != nil {
 		log.Printf("Error logging restore action: %v", err)
 	}
@@ -1407,7 +1402,7 @@ func (b *Bot) handleNotBadAction(query *tgbotapi.CallbackQuery, parts []string) 
 		Timestamp:  time.Now(),
 	}
 
-	err = b.db.LogAction(action)
+	err = b.logReputationAction(action)
 	if err != nil {
 		log.Printf("Error logging clear action: %v", err)
 	}
@@ -1473,7 +1468,7 @@ func (b *Bot) handleDeleteWarningAction(query *tgbotapi.CallbackQuery, parts []s
 		MessageID:  messageID,
 		Timestamp:  time.Now(),
 	}
-	if err := b.db.LogAction(action); err != nil {
+	if err := b.logReputationAction(action); err != nil {
 		log.Printf("delwarn: error logging action: %v", err)
 	}
 

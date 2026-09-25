@@ -32,6 +32,9 @@ type webModContext struct {
 	username  string
 	adminID   int64
 	adminName string
+	// suppressReputation is set for AI auto-actions because reputation is part
+	// of their input; scoring them would create a self-reinforcing loop.
+	suppressReputation bool
 }
 
 // newWebModContext validates the target and resolves usernames once.
@@ -85,7 +88,13 @@ func (b *Bot) logAction(ctx *webModContext, actionType, reason string, durationM
 		MessageID:  ctx.messageID,
 		Timestamp:  time.Now(),
 	}
-	if err := b.db.LogAction(action); err != nil {
+	var err error
+	if ctx.suppressReputation {
+		err = b.db.LogAction(action)
+	} else {
+		err = b.logReputationAction(action)
+	}
+	if err != nil {
 		log.Printf("Error logging WebUI %s action: %v", actionType, err)
 	}
 	b.recordManualModStat(ctx.adminID, actionType)
@@ -228,6 +237,7 @@ func (b *Bot) WebDeleteMessage(userID, chatID int64, messageID int, adminID int6
 	if err := b.db.RemoveMessageFromDeletion(messageID, chatID); err != nil {
 		log.Printf("WebUI delete: failed to remove message %d from deletion queue: %v", messageID, err)
 	}
+	b.deleteAlbumSiblings(chatID, messageID)
 
 	b.logAction(ctx, "delete", i18n.T("delete.reason"), 0)
 	return nil
@@ -311,16 +321,11 @@ func (b *Bot) WebWarnUser(userID, chatID int64, messageID int, adminID int64, ad
 		}
 	}
 
-	reputation := ""
-	if profile, perr := b.db.GetUserProfile(userID); perr == nil && profile != nil {
-		reputation = profile.Reputation
-	}
-
 	displayName := b.getUserDisplayName(userID)
-	warningText, werr := b.generateWarningNotification(displayName, messageText, muteInfoText, reputation, ctx.chatID)
+	warningText, werr := b.generateWarningNotification(displayName, messageText, muteInfoText, userID, ctx.chatID)
 	if werr != nil {
 		if strings.Contains(werr.Error(), "content_filter") && messageText != "" {
-			warningText, werr = b.generateWarningNotification(displayName, "", muteInfoText, reputation, ctx.chatID)
+			warningText, werr = b.generateWarningNotification(displayName, "", muteInfoText, userID, ctx.chatID)
 		}
 		if werr != nil {
 			warningText = i18n.T("warn.fallback")

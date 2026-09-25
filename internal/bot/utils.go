@@ -432,6 +432,34 @@ func (b *Bot) deleteMessageWithRetry(chatID int64, messageID int) error {
 	return lastErr
 }
 
+// deleteAlbumSiblings removes the remaining items of the Telegram album the
+// given message belongs to. Telegram delivers an album as one message per item,
+// so deleting only the item that was moderated would leave the rest of the same
+// logical post in the chat. No-op for standalone messages. Returns the number of
+// siblings actually removed.
+func (b *Bot) deleteAlbumSiblings(chatID int64, messageID int) int {
+	siblings, err := b.db.GetAlbumSiblingIDs(messageID, chatID)
+	if err != nil {
+		log.Printf("Album delete: could not look up siblings of message %d in chat %d: %v", messageID, chatID, err)
+		return 0
+	}
+	deleted := 0
+	for _, id := range siblings {
+		if err := b.deleteMessageWithRetry(chatID, id); err != nil {
+			log.Printf("Album delete: failed to delete sibling %d in chat %d: %v", id, chatID, err)
+			continue
+		}
+		deleted++
+		if err := b.db.RemoveMessageFromDeletion(id, chatID); err != nil {
+			log.Printf("Album delete: failed to clear deletion queue for %d in chat %d: %v", id, chatID, err)
+		}
+	}
+	if deleted > 0 {
+		log.Printf("Album delete: removed %d sibling(s) of message %d in chat %d", deleted, messageID, chatID)
+	}
+	return deleted
+}
+
 // restrictUserInChats restricts (mutes) a user in one or all moderation chats.
 // Returns the first error encountered (if any) along with the chat ID where it
 // happened. A nil error means every targeted chat restriction succeeded.

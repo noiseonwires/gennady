@@ -206,6 +206,7 @@ const (
 	telegramInitTimeout    = 10 * time.Second
 	telegramInitMaxRetries = 3
 	telegramInitRetryDelay = 2 * time.Second
+	telegramPollTimeout    = time.Minute
 )
 
 // newTelegramAPI creates the Telegram client, retrying on transient network
@@ -283,6 +284,12 @@ func New(cfg *config.Config, db *database.DB) (*Bot, error) {
 			// Run handlers synchronously in the polling worker so updates are
 			// processed in order, matching the previous library's behaviour.
 			tgbot.WithNotAsyncHandlers(),
+			tgbot.WithHTTPClient(telegramPollTimeout, &http.Client{
+				Timeout: telegramPollTimeout,
+				Transport: telegramDiagnosticTransport{
+					base: http.DefaultTransport,
+				},
+			}),
 		}
 		// With more than one worker, updates are processed concurrently (ordered
 		// only per worker). 1 is the library default, so only set it when raised.
@@ -293,10 +300,11 @@ func New(cfg *config.Config, db *database.DB) (*Bot, error) {
 			opts = append(opts, tgbot.WithDebug())
 		}
 		// Reaction updates are not part of Telegram's default update set, so we
-		// must opt in via allowed_updates. We only do this when reaction tracking
-		// is enabled - otherwise the default set is left untouched. Note that
+		// must opt in via allowed_updates. We do this when AI context tracking or
+		// event-based reputation needs reactions. Note that
 		// setting allowed_updates means we must list every update kind we want.
-		if cfg.AI.Enabled && cfg.AI.TrackReactions {
+		reputationTracksReactions := cfg.Reputation.Enabled == nil || *cfg.Reputation.Enabled
+		if (cfg.AI.Enabled && cfg.AI.TrackReactions) || reputationTracksReactions {
 			opts = append(opts, tgbot.WithAllowedUpdates(tgbot.AllowedUpdates{
 				models.AllowedUpdateMessage,
 				models.AllowedUpdateEditedMessage,
@@ -323,9 +331,8 @@ func New(cfg *config.Config, db *database.DB) (*Bot, error) {
 	}
 
 	bot.tgbot = api
-	bot.tg = tgadapter.New(api)
-
 	if api != nil {
+		bot.tg = tgadapter.New(api)
 		if me, err := api.GetMe(context.Background()); err == nil {
 			bot.botSelf = telegram.User{
 				ID:        me.ID,

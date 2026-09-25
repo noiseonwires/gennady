@@ -26,8 +26,7 @@ type Adapter struct {
 	api *tgbot.Bot
 }
 
-// New wraps an initialized *tgbot.Bot. api may be nil; callers must guard usage
-// accordingly (the bot does not issue outbound calls when Telegram is disabled).
+// New wraps an initialized *tgbot.Bot.
 func New(api *tgbot.Bot) *Adapter {
 	return &Adapter{api: api}
 }
@@ -397,6 +396,10 @@ func (a *Adapter) GetUserProfilePhotos(userID int64, limit int) (telegram.UserPr
 
 // DeleteWebhook implements telegram.Client.
 func (a *Adapter) DeleteWebhook(dropPending bool) error {
-	_, err := a.api.DeleteWebhook(a.ctx(), &tgbot.DeleteWebhookParams{DropPendingUpdates: dropPending})
+	var params *tgbot.DeleteWebhookParams
+	if dropPending {
+		params = &tgbot.DeleteWebhookParams{DropPendingUpdates: true}
+	}
+	_, err := a.api.DeleteWebhook(a.ctx(), params)
 	return wrapErr(err)
 }

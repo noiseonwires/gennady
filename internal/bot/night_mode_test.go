@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gennadium/internal/config"
+	"gennadium/internal/database"
 	"gennadium/internal/telegram"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,13 @@ func enableNightModeNow(c *config.Config) {
 		Enabled:   true,
 		StartTime: now.Add(-2 * time.Hour).Format("15:04"),
 		EndTime:   now.Add(2 * time.Hour).Format("15:04"),
+	}
+}
+
+func enableNightModeReputationExemption(c *config.Config, source, minimum string) {
+	enabled := true
+	c.NightMode.ReputationExemption = config.NightModeReputationExemptionConfig{
+		Enabled: &enabled, Source: source, MinimumGrade: minimum,
 	}
 }
 
@@ -168,6 +176,99 @@ func TestStageNightMode_ExemptTelegramServiceAccount(t *testing.T) {
 	assert.Equal(t, Continue, b.stageNightMode(mc))
 	assert.Empty(t, tg.DeletedIDs, "the Telegram service account must never be deleted by night mode")
 	assert.Empty(t, tg.SentMessages)
+}
+
+func TestStageNightMode_ReputationExemptionRequiresBothEnabledReputations(t *testing.T) {
+	t.Run("both neutral allows posting", func(t *testing.T) {
+		b, tg := newMockBot(t)
+		b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+		b.config.AI.UserProfiles.Enabled = true
+		enableNightModeNow(b.config)
+		enableNightModeReputationExemption(b.config, "both", "neutral")
+		require.NoError(t, b.db.UpsertUserProfile(&database.UserProfile{
+			UserID: 7, Profile: "AI profile", Reputation: "neutral",
+		}))
+
+		mc := b.newInboundContext(testMessage(-100, 7, 55, "hi"), false)
+		assert.Equal(t, Continue, b.stageNightMode(mc))
+		assert.Empty(t, tg.DeletedIDs)
+	})
+
+	t.Run("bad AI blocks posting", func(t *testing.T) {
+		b, tg := newMockBot(t)
+		b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+		b.config.AI.UserProfiles.Enabled = true
+		enableNightModeNow(b.config)
+		enableNightModeReputationExemption(b.config, "both", "neutral")
+		require.NoError(t, b.db.UpsertUserProfile(&database.UserProfile{
+			UserID: 7, Profile: "AI profile", Reputation: "bad",
+		}))
+
+		mc := b.newInboundContext(testMessage(-100, 7, 55, "hi"), false)
+		assert.Equal(t, Stop, b.stageNightMode(mc))
+		require.Len(t, tg.DeletedIDs, 1)
+	})
+
+	t.Run("bad score blocks posting", func(t *testing.T) {
+		b, tg := newMockBot(t)
+		b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+		b.config.AI.UserProfiles.Enabled = true
+		enableNightModeNow(b.config)
+		enableNightModeReputationExemption(b.config, "both", "neutral")
+		require.NoError(t, b.db.UpsertUserProfile(&database.UserProfile{
+			UserID: 7, Profile: "AI profile", Reputation: "neutral",
+		}))
+		b.recordReputationAction(&database.Action{
+			UserID: 7, ChatID: -100, MessageID: 54, ActionType: "mute", Duration: 60, Timestamp: time.Now(),
+		})
+
+		mc := b.newInboundContext(testMessage(-100, 7, 55, "hi"), false)
+		assert.Equal(t, Stop, b.stageNightMode(mc))
+		require.Len(t, tg.DeletedIDs, 1)
+	})
+}
+
+func TestStageNightMode_ReputationExemptionSourceSelection(t *testing.T) {
+	t.Run("both uses score when AI profiles are disabled", func(t *testing.T) {
+		b, tg := newMockBot(t)
+		b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+		enableNightModeNow(b.config)
+		enableNightModeReputationExemption(b.config, "both", "neutral")
+
+		mc := b.newInboundContext(testMessage(-100, 7, 55, "hi"), false)
+		assert.Equal(t, Continue, b.stageNightMode(mc))
+		assert.Empty(t, tg.DeletedIDs)
+	})
+
+	t.Run("AI source requires an AI profile", func(t *testing.T) {
+		b, tg := newMockBot(t)
+		b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+		b.config.AI.UserProfiles.Enabled = true
+		enableNightModeNow(b.config)
+		enableNightModeReputationExemption(b.config, "ai", "neutral")
+
+		mc := b.newInboundContext(testMessage(-100, 7, 55, "hi"), false)
+		assert.Equal(t, Stop, b.stageNightMode(mc))
+		require.Len(t, tg.DeletedIDs, 1)
+	})
+
+	t.Run("AI source ignores a bad score", func(t *testing.T) {
+		b, tg := newMockBot(t)
+		b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+		b.config.AI.UserProfiles.Enabled = true
+		enableNightModeNow(b.config)
+		enableNightModeReputationExemption(b.config, "ai", "neutral")
+		require.NoError(t, b.db.UpsertUserProfile(&database.UserProfile{
+			UserID: 7, Profile: "AI profile", Reputation: "good",
+		}))
+		b.recordReputationAction(&database.Action{
+			UserID: 7, ChatID: -100, MessageID: 54, ActionType: "mute", Duration: 60, Timestamp: time.Now(),
+		})
+
+		mc := b.newInboundContext(testMessage(-100, 7, 55, "hi"), false)
+		assert.Equal(t, Continue, b.stageNightMode(mc))
+		assert.Empty(t, tg.DeletedIDs)
+	})
 }
 
 func TestStageNightMode_FloodMutesAfterThreshold(t *testing.T) {

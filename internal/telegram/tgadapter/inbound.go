@@ -127,10 +127,12 @@ func toInboundMessage(m *models.Message) *telegram.Message {
 		out.Quote = &telegram.TextQuote{Text: m.Quote.Text, IsManual: m.Quote.IsManual}
 	}
 	out.Entities = toEntities(m.Entities)
+	out.CaptionEntities = toEntities(m.CaptionEntities)
 	out.ReplyMarkup = toInboundKeyboard(m.ReplyMarkup)
 
 	// Media presence.
 	out.Photo = toPhotoSizes(m.Photo)
+	out.MediaGroupID = m.MediaGroupID
 	if m.Sticker != nil {
 		out.Sticker = &telegram.Sticker{Emoji: m.Sticker.Emoji}
 	}
@@ -230,6 +232,7 @@ func toEntities(in []models.MessageEntity) []telegram.MessageEntity {
 			Type:   string(e.Type),
 			Offset: e.Offset,
 			Length: e.Length,
+			URL:    e.URL,
 		})
 	}
 	return out

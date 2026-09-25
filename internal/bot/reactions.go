@@ -75,6 +75,7 @@ func (b *Bot) handleMessageReactionCount(r *tgbotapi.MessageReactionCountUpdated
 		return
 	}
 	if affected > 0 {
+		b.recordReactionReputation(r.MessageID, r.Chat.ID, counts)
 		b.tracef("reactions (count): chat_id=%d message_id=%d reactions=%s", r.Chat.ID, r.MessageID, jsonStr)
 	}
 }
@@ -114,6 +115,7 @@ func (b *Bot) handleMessageReaction(r *tgbotapi.MessageReactionUpdated) {
 		log.Printf("Reactions: error applying per-user delta for message %d in chat %d: %v", r.MessageID, r.Chat.ID, err)
 		return
 	}
+	b.recordReactionReputation(r.MessageID, r.Chat.ID, counts)
 	b.tracef("reactions (per-user): chat_id=%d message_id=%d reactions=%s", r.Chat.ID, r.MessageID, jsonStr)
 }
 

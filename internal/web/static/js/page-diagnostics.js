@@ -16,6 +16,7 @@ function diagnosticsPage() {
         uptimeSeconds: null,
         moderatorUI: {},
         tokenUsage: { day: '', rows: [], services: [], totals: {} },
+        tokenCleanupRunning: false,
         modStats: { today: '', yesterday: '', day_before: '', rows: [] },
         webhookInfo: null,
         webhookError: '',
@@ -24,14 +25,15 @@ function diagnosticsPage() {
         svcList: Object.entries(SVC_LABELS).map(([key, label]) => ({ key, label })),
         testingKey: null,
 
-        // Debug-popup state (shared for moderation prompt and URL extraction).
+        // Debug-popup state shared by model, extraction and image diagnostics.
         debugOpen: false,
-        debugMode: '',          // 'moderation' | 'extract' | 'ocr'
+        debugMode: '',          // 'moderation' | 'creative' | 'extract' | 'ocr'
         debugServiceKey: '',
         debugServiceLabel: '',
         debugInput: '',
         debugMessageId: '',     // optional: debug a stored message by its Telegram ID
         debugChatId: '',        // optional chat scope for the message ID lookup
+        debugTopicId: '',       // optional current topic scope for creative message tools
         debugUseMessageId: false, // moderation mode: toggle between custom text and message ID
         debugImage: null,       // { dataURL, name, size } for OCR mode
         debugRunning: false,
@@ -99,6 +101,24 @@ function diagnosticsPage() {
                 this.modStats = await apiJSON('/api/modstats');
             } catch (e) { console.error(e); }
             this.loading = false;
+        },
+
+        async cleanupTokenUsage() {
+            const i18n = Alpine.store('i18n');
+            if (!confirm(i18n.t('diag_token_cleanup_confirm'))) return;
+            this.tokenCleanupRunning = true;
+            try {
+                const result = await apiJSON('/api/tokens/cleanup', { method: 'POST' });
+                if (result.error || result.error_code) {
+                    throw new Error(i18n.err(result) || 'Cleanup failed');
+                }
+                this.tokenUsage = await apiJSON('/api/tokens');
+                alert(i18n.t('diag_token_cleanup_done', result.deleted_rows || 0));
+            } catch (e) {
+                showApiError(e.message || String(e));
+            } finally {
+                this.tokenCleanupRunning = false;
+            }
         },
 
         async loadWebhookInfo() {
@@ -180,7 +200,31 @@ function diagnosticsPage() {
             this.testingKey = null;
         },
 
-        // Opens the debug popup. mode = 'moderation' | 'extract' | 'ocr'.
+        debugTitle() {
+            const i18n = Alpine.store('i18n');
+            if (this.debugMode === 'moderation') return i18n.t('diag_debug_mod_title');
+            if (this.debugMode === 'creative') return i18n.t('diag_debug_creative_title');
+            if (this.debugMode === 'ocr') return i18n.t('diag_debug_ocr_title');
+            return i18n.t('diag_debug_ext_title');
+        },
+        debugYesNo(value) {
+            return Alpine.store('i18n').t(value ? 'diag_yes' : 'diag_no');
+        },
+        safeCitationURL(value) {
+            try {
+                const url = new URL(value);
+                return (url.protocol === 'http:' || url.protocol === 'https:') ? url.href : '#';
+            } catch {
+                return '#';
+            }
+        },
+        formatDebugJSON(value) {
+            if (typeof value !== 'string') return JSON.stringify(value, null, 2);
+            try { return JSON.stringify(JSON.parse(value), null, 2); }
+            catch { return value; }
+        },
+
+        // Opens the debug popup for the selected diagnostics mode.
         openDebug(mode, key, label) {
             this.debugMode = mode;
             this.debugServiceKey = key;
@@ -188,6 +232,7 @@ function diagnosticsPage() {
             this.debugInput = '';
             this.debugMessageId = '';
             this.debugChatId = '';
+            this.debugTopicId = '';
             this.debugUseMessageId = false;
             this.debugImage = null;
             this.debugResult = null;
@@ -235,6 +280,16 @@ function diagnosticsPage() {
                         '/api/diagnostics/debug/moderation/' + encodeURIComponent(this.debugServiceKey),
                         { method: 'POST', body: JSON.stringify({ message: this.debugInput.trim() }) }
                     );
+                } else if (this.debugMode === 'creative') {
+                    const payload = { message: this.debugInput.trim() };
+                    const chat = String(this.debugChatId).trim();
+                    const topic = String(this.debugTopicId).trim();
+                    if (chat) payload.chat_id = parseInt(chat, 10);
+                    if (topic) payload.topic_id = parseInt(topic, 10);
+                    this.debugResult = await apiJSON(
+                        '/api/diagnostics/debug/creative/' + encodeURIComponent(this.debugServiceKey),
+                        { method: 'POST', body: JSON.stringify(payload) }
+                    );
                 } else if (this.debugMode === 'ocr') {
                     this.debugResult = await apiJSON(
                         '/api/diagnostics/debug/ocr/' + encodeURIComponent(this.debugServiceKey),
@@ -262,4 +317,3 @@ function diagnosticsPage() {
         }
     };
 }
-

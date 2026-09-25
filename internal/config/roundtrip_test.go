@@ -61,7 +61,7 @@ func fullySpecifiedConfig() *Config {
 		{Chat: -100222, Rules: "English only in chat 222."},
 	}
 	cfg.AI.LightModel = AIModelConfigs{Configs: []AIModelConfig{
-		{Endpoint: "https://light.example", APIKey: "light-key", DeploymentName: "gpt-light", Temperature: floatPtr(0.2)},
+		{Endpoint: "https://light.example", APIKey: "light-key", DeploymentName: "gpt-light", Temperature: floatPtr(0.2), UseForImageAnalysis: true, UseForWebSearch: true},
 	}}
 	cfg.AI.FullModel = AIModelConfigs{Configs: []AIModelConfig{
 		{Endpoint: "https://full.example", APIKey: "full-key", DeploymentName: "gpt-full", Temperature: floatPtr(0.7), OmitMaxTokens: true},
@@ -69,10 +69,14 @@ func fullySpecifiedConfig() *Config {
 	}}
 	cfg.AI.ContentModeration.Enabled = true
 	cfg.AI.ContentModeration.DefaultMuteMinutes = 30
+	cfg.AI.ContentModeration.AdminNotificationDelaySeconds = 7
 	cfg.AI.ContentModeration.Rules = []ModerationRule{
 		{Trigger: "spam", Action: "delete", Description: "obvious spam"},
 		{Trigger: "insult", Action: "warn", NotifyAdmin: boolPtr(false)},
 	}
+	cfg.AI.CreativeReplies.MessageToolsEnabled = true
+	cfg.AI.CreativeReplies.MessageToolsMaxLimit = 17
+	cfg.AI.CreativeReplies.ContextOnlyCurrentTopic = boolPtr(true)
 	cfg.AI.Rss.Feeds = []RssFeed{
 		{
 			Name: "News", URL: "https://news.example/rss", Time: "08:00", Enabled: true,
@@ -143,9 +147,16 @@ func TestConfigDump_PreservesEveryValueCategory(t *testing.T) {
 	require.Len(t, restored.AI.LightModel.Configs, 1)
 	require.NotNil(t, restored.AI.LightModel.Configs[0].Temperature)
 	assert.InDelta(t, 0.2, *restored.AI.LightModel.Configs[0].Temperature, 1e-9, "*float64")
+	assert.True(t, restored.AI.LightModel.Configs[0].UseForImageAnalysis, "per-model image analysis flag")
+	assert.True(t, restored.AI.LightModel.Configs[0].UseForWebSearch, "per-model web search flag")
 
 	// Custom aggregate: ChatIDList
 	assert.Equal(t, []int64{-100111, -100222}, restored.Moderation.ChatIDs.IDs)
+	assert.Equal(t, 7, restored.AI.ContentModeration.AdminNotificationDelaySeconds)
+	assert.True(t, restored.AI.CreativeReplies.MessageToolsEnabled)
+	assert.Equal(t, 17, restored.AI.CreativeReplies.MessageToolsMaxLimit)
+	require.NotNil(t, restored.AI.CreativeReplies.ContextOnlyCurrentTopic)
+	assert.True(t, *restored.AI.CreativeReplies.ContextOnlyCurrentTopic)
 
 	// Custom aggregate: ChatTopicList
 	require.Len(t, restored.Moderation.ExcludedTopics.Refs, 2)

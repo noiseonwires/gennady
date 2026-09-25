@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"gennadium/internal/config"
+	"gennadium/internal/database"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -140,4 +141,32 @@ func TestCallAzureOpenAI_HappyPathNoRetry(t *testing.T) {
 	out, err := b.callAzureOpenAI("test", "p", "s")
 	require.NoError(t, err)
 	assert.Equal(t, "ok", out)
+}
+
+func TestGenerateWarningNotificationSupportsDualReputationPlaceholders(t *testing.T) {
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"warning"}}]}`))
+	})
+	b.config.AI.Enabled = true
+	b.config.AI.FullModel = fullModelConfigs()
+	b.config.AI.UserProfiles.Enabled = true
+	b.config.AI.ContentModeration.WarningPrompt = config.PromptPair{
+		System: "PROFILE={{user_profile}}",
+		User:   "COMPACT={{user_reputation}} LEGACY={{reputation}} SCORE={{reputation_score}} GRADE={{reputation_grade}}",
+	}
+	require.NoError(t, b.db.UpsertUserProfile(&database.UserProfile{
+		UserID: 42, Username: "mixed", Profile: "AI profile text", Reputation: "very_bad",
+	}))
+
+	out, err := b.generateWarningNotification("Mixed User", "message", "", 42, -100)
+	require.NoError(t, err)
+	assert.Equal(t, "warning", out)
+
+	body := rt.last().Body
+	assert.Contains(t, body, "Score reputation: neutral (score 0.0).")
+	assert.Contains(t, body, "AI reputation: very_bad")
+	assert.Contains(t, body, "AI profile text")
+	assert.Contains(t, body, "LEGACY=neutral SCORE=0.0 GRADE=neutral")
+	assert.NotContains(t, body, "{{user_profile}}")
+	assert.NotContains(t, body, "{{user_reputation}}")
 }

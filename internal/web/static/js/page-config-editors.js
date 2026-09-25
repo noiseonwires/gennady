@@ -384,8 +384,8 @@ function modelEditor(which) {
                 const data = await apiJSON('/api/config/models');
                 const arr = data[which + '_model'] || [];
                 // `enabled` is omitted by the API when unset, which means enabled.
-                this.models = arr.length ? arr.map(m => ({ ...m, enabled: m.enabled !== false, _show: false }))
-                    : [{ provider: '', enabled: true, endpoint: '', api_key: '', deployment_name: '', temperature: null, omit_max_tokens: false, _show: false }];
+                this.models = arr.length ? arr.map(m => ({ ...m, enabled: m.enabled !== false, use_for_image_analysis: m.use_for_image_analysis === true, use_for_web_search: m.use_for_web_search === true, _show: false }))
+                    : [{ provider: '', enabled: true, endpoint: '', api_key: '', deployment_name: '', temperature: null, omit_max_tokens: false, use_for_image_analysis: false, use_for_web_search: false, _show: false }];
             } catch (e) { console.error('Failed to load models', e); }
             this.loading = false;
         },

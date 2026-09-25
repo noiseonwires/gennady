@@ -4,6 +4,7 @@ package bot
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"gennadium/internal/config"
 	"gennadium/internal/database"
+	"gennadium/internal/i18n"
 )
 
 // recordDiagnostics records an external API call result if a diagnostics recorder is set.
@@ -175,17 +177,127 @@ func (b *Bot) DebugModerationPrompt(serviceKey, message string) (systemPrompt, u
 		// Still allow debugging - prompts are configured even if disabled.
 	}
 	replacements := map[string]string{
-		"message":         message,
-		"chat_rules":      b.config.ChatRulesFor(0),
-		"user_profile":    "",
-		"user_reputation": "",
-		"reply_to":        "",
-		"new_user_rules":  b.config.AI.ContentModeration.NewUserRules,
+		"message":          message,
+		"chat_rules":       b.config.ChatRulesFor(0),
+		"user_profile":     "",
+		"user_reputation":  "",
+		"reputation_score": "0.0",
+		"reputation_grade": "neutral",
+		"reply_to":         "",
+		"new_user_rules":   b.config.AI.ContentModeration.NewUserRules,
 	}
 	systemPrompt = applyReplacements(b.config.AI.ContentModeration.Prompt.System, replacements)
 	userPrompt = applyReplacements(b.config.AI.ContentModeration.Prompt.User, replacements)
 	resp, callErr := b.callAzureOpenAIWithConfig("webui_debug", userPrompt, systemPrompt, modelCfg, 200, false)
 	return systemPrompt, userPrompt, resp, callErr
+}
+
+// DebugCreativeReply renders the configured creative-reply prompt for ad-hoc
+// text and runs it against exactly one diagnostics model. When web search is
+// enabled for both the feature and model, details includes provider-exposed
+// tool calls, citations, token usage and reasoning summaries. Hidden model
+// reasoning is never requested or exposed.
+func (b *Bot) DebugCreativeReply(serviceKey, message string, chatID int64, topicID int) (systemPrompt, userPrompt, response string, details map[string]any, err error) {
+	modelCfg, err := b.resolveModelConfig(serviceKey)
+	if err != nil {
+		return "", "", "", nil, err
+	}
+
+	replacements := map[string]string{
+		"message":          message,
+		"context":          "",
+		"quote":            "",
+		"user_profile":     "",
+		"user_reputation":  "",
+		"reputation_score": "0.0",
+		"reputation_grade": "neutral",
+	}
+	systemPrompt = applyReplacements(b.config.AI.CreativeReplies.Prompt.System, replacements)
+	userPrompt = applyReplacements(b.config.AI.CreativeReplies.Prompt.User, replacements)
+	if userPrompt == "" || userPrompt == b.config.AI.CreativeReplies.Prompt.User {
+		userPrompt = i18n.Tf("ai.creative_reply", message, "")
+	}
+
+	details = map[string]any{
+		"api":                      "chat_completions",
+		"web_search_configured":    b.config.AI.CreativeReplies.WebSearchEnabled,
+		"model_web_search_enabled": modelCfg.UseForWebSearch,
+		"web_search_attempted":     false,
+		"web_search_used":          false,
+		"message_tools_configured": b.config.AI.CreativeReplies.MessageToolsEnabled,
+		"message_tools_attempted":  false,
+		"fallback_used":            false,
+	}
+	if b.config.AI.CreativeReplies.MessageToolsEnabled {
+		if chatID == 0 {
+			details["message_tools_error"] = "chat_id is required to debug scoped message tools"
+		} else {
+			details["api"] = "responses"
+			details["message_tools_attempted"] = true
+			details["message_tools_scope"] = map[string]any{"chat_id": chatID, "topic_id": topicID}
+			scope := messageToolScope{
+				ChatID: chatID, TopicID: topicID,
+				TopicOnly:     b.config.AI.CreativeReplies.IsContextOnlyCurrentTopic(),
+				TopicResolved: true,
+				MaxLimit:      configuredMessageToolsMaxLimit(b.config.AI.CreativeReplies.MessageToolsMaxLimit),
+			}
+			includeWebSearch := b.config.AI.CreativeReplies.WebSearchEnabled && modelCfg.UseForWebSearch
+			details["web_search_attempted"] = includeWebSearch
+			result, toolsErr := b.callResponsesWithMessageTools("webui_debug_creative", userPrompt, systemPrompt, modelCfg, scope, includeWebSearch)
+			details["web_search_used"] = result.WebSearchUsed
+			details["tool_calls"] = result.ToolCalls
+			details["message_tool_calls"] = result.MessageToolCalls
+			details["citations"] = result.Citations
+			details["reasoning_summaries"] = result.ReasoningSummaries
+			if result.Usage != nil {
+				details["usage"] = map[string]int64{
+					"input_tokens":  result.Usage.PromptTokens,
+					"output_tokens": result.Usage.CompletionTokens,
+					"total_tokens":  result.Usage.TotalTokens,
+				}
+			}
+			if toolsErr == nil {
+				return systemPrompt, userPrompt, result.Text, details, nil
+			}
+			details["message_tools_error"] = toolsErr.Error()
+			var contentFilterErr *ContentFilterError
+			if errors.As(toolsErr, &contentFilterErr) {
+				return systemPrompt, userPrompt, "", details, toolsErr
+			}
+			details["fallback_used"] = true
+			details["api"] = "chat_completions"
+		}
+	}
+
+	if b.config.AI.CreativeReplies.WebSearchEnabled && modelCfg.UseForWebSearch {
+		details["api"] = "responses"
+		details["web_search_attempted"] = true
+		result, searchErr := b.callResponsesWithWebSearchDetailed("webui_debug_creative", userPrompt, systemPrompt, modelCfg, 500)
+		details["web_search_used"] = result.WebSearchUsed
+		details["tool_calls"] = result.ToolCalls
+		details["citations"] = result.Citations
+		details["reasoning_summaries"] = result.ReasoningSummaries
+		if result.Usage != nil {
+			details["usage"] = map[string]int64{
+				"input_tokens":  result.Usage.PromptTokens,
+				"output_tokens": result.Usage.CompletionTokens,
+				"total_tokens":  result.Usage.TotalTokens,
+			}
+		}
+		if searchErr == nil {
+			return systemPrompt, userPrompt, result.Text, details, nil
+		}
+		details["web_search_error"] = searchErr.Error()
+		var contentFilterErr *ContentFilterError
+		if errors.As(searchErr, &contentFilterErr) {
+			return systemPrompt, userPrompt, "", details, searchErr
+		}
+		details["api"] = "chat_completions"
+		details["fallback_used"] = true
+	}
+
+	resp, callErr := b.callAzureOpenAIWithConfig("webui_debug_creative", userPrompt, systemPrompt, modelCfg, 500, false)
+	return systemPrompt, userPrompt, resp, details, callErr
 }
 
 // DebugModerationByMessageID looks up a stored message by its Telegram message
@@ -229,16 +341,19 @@ func (b *Bot) DebugModerationByMessageID(serviceKey string, messageID int, chatI
 	}
 
 	userProfile := b.getUserProfileForModeration(msg.UserID, msg.ChatID)
-	userReputation := b.getUserReputationForModeration(msg.UserID)
+	userReputation := b.getUserReputationForModeration(msg.UserID, msg.ChatID)
+	reputationGrade, reputationScore := b.reputationPromptValues(msg.UserID, msg.ChatID)
 	newUserRules := b.newUserRulesFor(msg.UserID)
 
 	replacements := map[string]string{
-		"message":         msg.Text,
-		"chat_rules":      b.config.ChatRulesFor(msg.ChatID),
-		"user_profile":    userProfile,
-		"user_reputation": userReputation,
-		"reply_to":        replyToText,
-		"new_user_rules":  newUserRules,
+		"message":          msg.Text,
+		"chat_rules":       b.config.ChatRulesFor(msg.ChatID),
+		"user_profile":     userProfile,
+		"user_reputation":  userReputation,
+		"reputation_score": reputationScore,
+		"reputation_grade": reputationGrade,
+		"reply_to":         replyToText,
+		"new_user_rules":   newUserRules,
 	}
 	systemPrompt = applyReplacements(b.config.AI.ContentModeration.Prompt.System, replacements)
 	userPrompt = applyReplacements(b.config.AI.ContentModeration.Prompt.User, replacements)

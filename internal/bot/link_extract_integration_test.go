@@ -5,6 +5,7 @@ package bot
 import (
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -180,6 +181,20 @@ func TestFetchWithDiffbot(t *testing.T) {
 	assert.Contains(t, rt.last().Host, "diffbot.com")
 }
 
+func TestFetchWithDiffbot_ContentField(t *testing.T) {
+	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"humanLanguage":"ru","title":"Документ",
+			"objects":[{"type":"other","title":"Документ","content":"Полный текст документа"}]}`))
+	})
+	b.config.AI.LinkSummaries.DiffbotAPIKey = "k"
+
+	content, title, lang, err := b.fetchWithDiffbot(publicTarget)
+	require.NoError(t, err)
+	assert.Equal(t, "Полный текст документа", content)
+	assert.Equal(t, "Документ", title)
+	assert.Equal(t, "ru", lang)
+}
+
 func TestFetchWithDiffbot_NoObjects(t *testing.T) {
 	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"objects":[]}`))
@@ -188,6 +203,16 @@ func TestFetchWithDiffbot_NoObjects(t *testing.T) {
 
 	_, _, _, err := b.fetchWithDiffbot(publicTarget)
 	require.Error(t, err)
+}
+
+func TestFetchWithDiffbot_ErrorPayload(t *testing.T) {
+	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"errorCode":500,"error":"Could not download page (403)"}`))
+	})
+	b.config.AI.LinkSummaries.DiffbotAPIKey = "k"
+
+	_, _, _, err := b.fetchWithDiffbot(publicTarget)
+	require.EqualError(t, err, "Diffbot error 500: Could not download page (403)")
 }
 
 func TestFetchWithCloudflare(t *testing.T) {
@@ -201,6 +226,25 @@ func TestFetchWithCloudflare(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, content, "Markdown body content")
 	assert.Contains(t, rt.last().Host, "cloudflare.com")
+}
+
+func TestFetchAndExtractLinkContent_ShortCloudflareFallsBackToManual(t *testing.T) {
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/browser-rendering/markdown") {
+			_, _ = w.Write([]byte(`{"success":true,"result":"` + strings.Repeat("Cloudflare error page. ", 30) + `"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`<html><head><title>Article</title></head><body><article>Manual HTTP article body.</article></body></html>`))
+	})
+	b.config.AI.LinkSummaries.CloudflareAccountID = "acct"
+	b.config.AI.LinkSummaries.CloudflareAPIToken = "token"
+
+	content, title, lang, err := b.fetchAndExtractLinkContent(publicTarget)
+	require.NoError(t, err)
+	assert.Equal(t, "Manual HTTP article body.", content)
+	assert.Equal(t, "Article", title)
+	assert.Empty(t, lang)
+	assert.Equal(t, 2, rt.count())
 }
 
 func TestFetchWithCloudflareContent(t *testing.T) {

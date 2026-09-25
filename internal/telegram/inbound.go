@@ -56,6 +56,7 @@ type MessageEntity struct {
 	Type   string
 	Offset int
 	Length int
+	URL    string
 }
 
 // TextQuote is the part of a message that the sender chose to quote when
@@ -136,4 +137,44 @@ func (m *Message) CommandArguments() string {
 		return ""
 	}
 	return strings.TrimSpace(m.Text[entity.Length:])
+}
+
+// TextWithEntityLinks returns the message text (or media caption) with hidden
+// text-link targets appended, so consumers do not lose URLs that Telegram keeps
+// only in entity metadata.
+func (m *Message) TextWithEntityLinks() string {
+	if m == nil {
+		return ""
+	}
+
+	text := m.Text
+	entities := m.Entities
+	if text == "" {
+		text = m.Caption
+		entities = m.CaptionEntities
+	}
+
+	seen := make(map[string]struct{})
+	var links []string
+	for _, entity := range entities {
+		if entity.Type != "text_link" {
+			continue
+		}
+		target := strings.TrimSpace(entity.URL)
+		if target == "" || strings.Contains(text, target) {
+			continue
+		}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		links = append(links, target)
+	}
+	if len(links) == 0 {
+		return text
+	}
+	if text == "" {
+		return strings.Join(links, "\n")
+	}
+	return text + "\n" + strings.Join(links, "\n")
 }

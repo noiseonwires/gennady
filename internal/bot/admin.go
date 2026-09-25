@@ -89,8 +89,6 @@ func (b *Bot) effectivePublicURL() string {
 	return ""
 }
 
-
-
 // handleSuperAdminCommand handles Super admin commands for silent moderation.
 func (b *Bot) handleSuperAdminCommand(message *tgbotapi.Message) bool {
 	command := message.Command()

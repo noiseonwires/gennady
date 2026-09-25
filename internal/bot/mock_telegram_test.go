@@ -32,6 +32,7 @@ type mockTelegram struct {
 	SendFunc        func(p telegram.SendMessageParams) (telegram.Message, error)
 	EditFunc        func(p telegram.EditMessageTextParams) (telegram.Message, error)
 	DeleteFunc      func(chatID int64, messageID int) error
+	ReactionFunc    func(chatID int64, messageID int, emoji string) error
 	RestrictFunc    func(p telegram.RestrictChatMemberParams) error
 	GetChatFunc     func(chatID int64) (telegram.Chat, error)
 	GetChatFullFunc func(chatID int64) (telegram.ChatFull, error)
@@ -127,6 +128,9 @@ func (m *mockTelegram) SetMessageReaction(chatID int64, messageID int, emoji str
 	m.mu.Lock()
 	m.Reactions = append(m.Reactions, reactionCall{ChatID: chatID, MessageID: messageID, Emoji: emoji})
 	m.mu.Unlock()
+	if m.ReactionFunc != nil {
+		return m.ReactionFunc(chatID, messageID, emoji)
+	}
 	return nil
 }
 

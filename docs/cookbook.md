@@ -83,15 +83,15 @@ Placeholders are replaced before the prompt is sent. Each prompt only supports i
 
 | Prompt (`ai.…`) | Placeholders |
 | --- | --- |
-| `content_moderation.prompt` | `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reply_to}}`, `{{new_user_rules}}` |
-| `content_moderation.warning_prompt` | `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{reputation}}` |
-| `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}` |
+| `content_moderation.prompt` | `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}`, `{{reply_to}}`, `{{new_user_rules}}` |
+| `content_moderation.warning_prompt` | `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
+| `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
 | `morning_greeting.prompt` | `{{weekday}}`, `{{date}}`, `{{weather}}`, `{{weather_ru}}`, `{{holidays}}`, `{{events}}` |
 | `daily_summary.prompt` | `{{messages}}` |
 | `message_summaries.prompt` | `{{message}}` |
 | `link_summaries.prompt` | `{{title}}`, `{{url}}`, `{{content}}`, `{{truncated_suffix}}` |
-| `user_profiles.prompt` | `{{username}}`, `{{messages}}` |
-| `user_profiles.update_prompt` | `{{username}}`, `{{messages}}`, `{{existing_profile}}` |
+| `user_profiles.prompt` | `{{username}}`, `{{messages}}`, `{{previous_days_messages}}` |
+| `user_profiles.update_prompt` | `{{username}}`, `{{messages}}`, `{{existing_profile}}`, `{{previous_days_messages}}` |
 | `website_watch.prompt` | `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}` |
 | `translation_prompt` / `rss.*` | `{{text}}` |
 
@@ -100,14 +100,15 @@ Placeholders are replaced before the prompt is sent. Each prompt only supports i
 - `{{user_profile}}` expands to a **rich block** - AI profile text + reputation, 7-day
   warning/mute stats, an activity chart, an admin marker, and username-reuse warnings. Most
   context, more tokens.
-- `{{user_reputation}}` expands to a **compact block** - just the reputation score and a
-  suspicious-profile note (with reasons) if present. Token-cheap; use it when you only need
-  the score.
+- `{{user_reputation}}` expands to a **compact block** - score-derived grade and numeric score,
+  the separate AI verdict when available, and suspicious-profile findings. Token-cheap; use it
+  when the full profile text and activity history are unnecessary.
 
-Both are empty unless `ai.user_profiles.enabled: true` (or
-`content_moderation.new_user_profile_check_enabled: true`).
+With event-based reputation enabled (the default), both contain the chat-local numeric score
+and grade even when AI profiles are disabled. Use `{{reputation_score}}` or
+`{{reputation_grade}}` when a prompt needs only the raw value.
 
-Both also work in `creative_replies.prompt`, so the bot can tailor its banter to who it is
+Both also work in warning and `creative_replies.prompt`, so the bot can tailor its wording to who it is
 replying to (e.g. go easy on newcomers, tease the regulars).
 
 **`{{new_user_rules}}`:** expands to your `ai.content_moderation.new_user_rules` text **only**
@@ -236,16 +237,20 @@ This keeps the moderation prompt and the warning prompt perfectly consistent.
 
 ## Recipe 5: Reputation-aware strictness
 
-Turn on AI user profiles. A daily job builds a short profile per active user ending in
-`Reputation: good|neutral|bad`. That reputation is then injected into moderation so the bot can
-be lenient with trusted regulars and strict with known troublemakers.
+Event-based reputation is enabled by default. Reactions and confirmed moderation actions build
+a bounded, decaying score for each user in each chat. AI profiles are optional weak evidence.
 
 ```yaml
+reputation:
+  weights:
+    warning: -5
+    long_mute: -10
 ai:
   user_profiles:
     enabled: true
     time: "04:50"          # daily rebuild time (off-peak)
     skip_forever_muted_users: false
+    previous_days_messages_count: 10   # older messages for {{previous_days_messages}}
   content_moderation:
     prompt:
       system: |
@@ -261,9 +266,13 @@ ai:
         «{{message}}»
 ```
 
-The feedback loop: messages → daily profile + reputation → injected into moderation → smarter
-decisions tomorrow. Use `{{user_reputation}}` instead of `{{user_profile}}` if you want the
-same signal at a fraction of the token cost.
+Use `{{user_reputation}}` instead of `{{user_profile}}` for a compact block, or the raw
+`{{reputation_score}}` / `{{reputation_grade}}` values for minimal token use. The AI profile
+grade replaces its previous small adjustment; it never accumulates as repeated evidence.
+
+Add `{{previous_days_messages}}` to the profile prompts to also show the model the user's last
+`previous_days_messages_count` messages from earlier days, so a single bad evening doesn't erase
+months of good behavior (and vice versa).
 
 ---
 
@@ -277,16 +286,17 @@ shot**, on their first message in a moderation chat (runs **once** per user per 
 rate-limit concerns): name, bio and profile photo, plus their **linked personal channel**
 (name, description, photo) when present.
 
-Photos are screened with **Azure Content Safety first**; Azure Vision and OCR.space are used to
-*describe* a photo only when Content Safety is unavailable or fails. *All* the gathered text is
-then judged by a dedicated AI prompt. **The check does not require Content Safety** - if it's
-off, Vision or OCR.space describe the photos instead.
+Photos are screened with **Azure Content Safety first**; multimodal AI, Azure Vision and
+OCR.space are used to *describe* a photo only when Content Safety is unavailable or fails.
+*All* the gathered text is then judged by a dedicated AI prompt. **The check does not require
+Content Safety** - if it's off, an opted-in multimodal model, Vision or OCR.space describes the
+photos instead.
 
 ```yaml
 ai:
   content_moderation:
     new_user_profile_check_enabled: true
-    # Photo screening prefers Content Safety; Vision/OCR.space are the fallback
+    # Photo screening prefers Content Safety; AI/Vision/OCR are fallback
     # describers. Configure at least one so photos can be analyzed:
     content_safety_enabled: true    # primary photo signal (recommended)
     vision_enabled: true            # fallback describer (or ocrspace_enabled)
@@ -375,17 +385,25 @@ context. But you don't want to mute the *replier* for the quote. Two safeguards:
 
 ---
 
-## Recipe 8: Image moderation (Vision / OCR / Content Safety)
+## Recipe 8: Image moderation (multimodal AI / Vision / OCR / Content Safety)
 
 Catch violations hidden in screenshots and memes by extracting their text/content and running
-it through the **same** moderation rules. Two sources, used as a fallback chain
-**Azure Vision → OCR.space**:
+it through the **same** moderation rules. Describers use the fallback chain
+**multimodal AI → Azure Vision → OCR.space**:
 
 ```yaml
 ai:
+  light_model:
+    - provider: "azure"
+      endpoint: "https://YOUR.openai.azure.com/"
+      api_key: "KEY"
+      deployment_name: "gpt-4o-mini"
+      use_for_image_analysis: true
   content_moderation:
+    ai_image_analysis_enabled: true
+
     # Best accuracy - Azure Vision (captioning + OCR)
-    vision_enabled: true
+    vision_enabled: false
     vision_endpoint: "https://YOUR.cognitiveservices.azure.com/"
     vision_api_key: "KEY"
 
@@ -396,7 +414,8 @@ ai:
 ```
 
 Extracted text flows into your normal moderation prompt, so all your verdict/rule recipes apply
-to images too. For reliable moderation, prefer **Azure Vision**.
+to images too. Keep **Content Safety** enabled separately when its deterministic safety signal
+drives automatic actions.
 
 ---
 

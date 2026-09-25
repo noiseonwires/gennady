@@ -46,6 +46,78 @@ func TestDebugModerationPrompt_RendersNewUserRules(t *testing.T) {
 	assert.NotContains(t, userPrompt, "{{new_user_rules}}")
 }
 
+func TestDebugCreativeReply_ChatCompletions(t *testing.T) {
+	b, rt := debugBot(t)
+	b.config.AI.CreativeReplies.Prompt = config.PromptPair{
+		System: "be witty",
+		User:   "reply to {{message}}",
+	}
+
+	systemPrompt, userPrompt, response, details, err := b.DebugCreativeReply("openai_full:gpt-test", "hello", 0, 0)
+	require.NoError(t, err)
+	assert.Equal(t, "be witty", systemPrompt)
+	assert.Equal(t, "reply to hello", userPrompt)
+	assert.Equal(t, "ok", response)
+	assert.Equal(t, "chat_completions", details["api"])
+	assert.Equal(t, false, details["web_search_attempted"])
+	assert.Contains(t, rt.last().Path, "/chat/completions")
+}
+
+func TestDebugCreativeReply_WebSearchDetails(t *testing.T) {
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(webSearchSuccessResponse))
+	})
+	b.config.AI.Enabled = true
+	b.config.AI.CreativeReplies.WebSearchEnabled = true
+	b.config.AI.CreativeReplies.Prompt = config.PromptPair{System: "be current", User: "answer {{message}}"}
+	model := fullModelConfig()
+	model.UseForWebSearch = true
+	b.config.AI.FullModel = config.AIModelConfigs{Configs: []config.AIModelConfig{model}}
+
+	_, _, response, details, err := b.DebugCreativeReply("openai_full:gpt-test", "what happened?", 0, 0)
+	require.NoError(t, err)
+	assert.Contains(t, response, "Current answer.")
+	assert.Equal(t, "responses", details["api"])
+	assert.Equal(t, true, details["web_search_attempted"])
+	assert.Equal(t, true, details["web_search_used"])
+	assert.NotEmpty(t, details["tool_calls"])
+	assert.NotEmpty(t, details["citations"])
+	assert.NotEmpty(t, details["reasoning_summaries"])
+	assert.NotEmpty(t, details["usage"])
+	assert.Contains(t, rt.last().Path, "/responses")
+}
+
+func TestDebugCreativeReply_MessageToolDetails(t *testing.T) {
+	var calls int
+	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			_, _ = w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"find_messages_from_user","arguments":"{\"user\":\"7\",\"limit\":5,\"offset\":0}"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`))
+	})
+	b.config.AI.Enabled = true
+	b.config.AI.CreativeReplies.MessageToolsEnabled = true
+	b.config.AI.CreativeReplies.MessageToolsMaxLimit = 5
+	enabled := true
+	b.config.AI.CreativeReplies.ContextOnlyCurrentTopic = &enabled
+	b.config.AI.CreativeReplies.Prompt = config.PromptPair{System: "be helpful", User: "answer {{message}}"}
+	b.config.AI.FullModel = fullModelConfigs()
+	storeMessageToolTestMessage(t, b, 1, -100, 7, "alice", "history", 42, time.Now())
+	storeMessageToolTestMessage(t, b, 2, -100, 7, "alice", "other topic history", 99, time.Now())
+
+	_, _, response, details, err := b.DebugCreativeReply("openai_full:gpt-test", "question", -100, 42)
+	require.NoError(t, err)
+	assert.Equal(t, "done", response)
+	assert.Equal(t, true, details["message_tools_attempted"])
+	toolCalls, ok := details["message_tool_calls"].([]messageToolExecutionInfo)
+	require.True(t, ok)
+	require.Len(t, toolCalls, 1)
+	assert.Contains(t, toolCalls[0].Output, "history")
+	assert.NotContains(t, toolCalls[0].Output, "other topic history")
+}
+
 func TestDebugModerationByMessageID_RendersNewUserRulesForNewUser(t *testing.T) {
 	b, _ := debugBot(t)
 

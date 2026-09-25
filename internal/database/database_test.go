@@ -3,6 +3,7 @@
 package database
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,11 +34,59 @@ func TestResolveProvider(t *testing.T) {
 	assert.Equal(t, ProviderLocal, ResolveProvider("LOCAL", "", ""))      // case-insensitive
 }
 
+func TestSchemaStatementName(t *testing.T) {
+	assert.Equal(t, "muted_users", schemaStatementName(`
+		CREATE TABLE IF NOT EXISTS muted_users (
+			user_id INTEGER NOT NULL
+		)`))
+	assert.Equal(t, "idx_muted_users_active_lookup", schemaStatementName(
+		`CREATE INDEX IF NOT EXISTS idx_muted_users_active_lookup ON muted_users (user_id)`,
+	))
+	assert.Equal(t, "unknown", schemaStatementName("SELECT 1"))
+}
+
 func TestInitAndMetadata(t *testing.T) {
 	db := newTestDB(t)
 	assert.True(t, db.IsLocal())
 	assert.False(t, db.IsRemote())
 	assert.Equal(t, ProviderLocal, db.Provider())
+	version, err := db.getSchemaVersion()
+	require.NoError(t, err)
+	assert.Equal(t, currentSchemaVersion, version)
+	require.NoError(t, db.createTables(), "an unchanged schema should remain current")
+}
+
+func TestInitLocalErrorIncludesDatabaseFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "moderation.db")
+
+	_, err := InitLocal(path)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, fmt.Sprintf("local database file %q", path))
+	assert.ErrorContains(t, err, "unable to open database file")
+}
+
+func TestSchemaVersionUpgrade(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, db.setSchemaVersion(0))
+
+	require.NoError(t, db.createTables())
+	version, err := db.getSchemaVersion()
+	require.NoError(t, err)
+	assert.Equal(t, currentSchemaVersion, version)
+}
+
+func TestSchemaVersionRejectsNewerDatabase(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, db.setSchemaVersion(currentSchemaVersion+1))
+
+	err := db.createTables()
+	require.ErrorContains(t, err, "is newer than this application supports")
+}
+
+func TestSetSchemaVersionRejectsNegativeVersion(t *testing.T) {
+	db := newTestDB(t)
+	require.ErrorContains(t, db.setSchemaVersion(-1), "cannot be negative")
 }
 
 func TestInit_UnsupportedProvider(t *testing.T) {
@@ -243,6 +292,38 @@ func TestTokenUsage(t *testing.T) {
 	assert.Equal(t, int64(110), stats[0].DailyInput)
 	assert.Equal(t, int64(55), stats[0].DailyOutput)
 	assert.Equal(t, int64(110), stats[0].TotalInput)
+}
+
+func TestDeleteTokenUsageForUnconfiguredModels(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, db.RecordTokenUsage("configured", "moderation", "2026-06-08", 10, 5))
+	require.NoError(t, db.RecordTokenUsage("configured", "summary", "2026-06-09", 20, 10))
+	require.NoError(t, db.RecordTokenUsage("stale", "moderation", "2026-06-08", 30, 15))
+	require.NoError(t, db.RecordTokenUsage("stale", "moderation", "2026-06-09", 40, 20))
+
+	deleted, err := db.DeleteTokenUsageForUnconfiguredModels([]string{"configured", "configured", ""})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), deleted)
+
+	stats, err := db.GetTokenUsageStats("2026-06-09")
+	require.NoError(t, err)
+	require.Len(t, stats, 2)
+	for _, stat := range stats {
+		assert.Equal(t, "configured", stat.Model)
+	}
+}
+
+func TestDeleteTokenUsageForUnconfiguredModels_NoConfiguredModels(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, db.RecordTokenUsage("stale", "moderation", "2026-06-09", 30, 15))
+
+	deleted, err := db.DeleteTokenUsageForUnconfiguredModels(nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+
+	stats, err := db.GetTokenUsageStats("2026-06-09")
+	require.NoError(t, err)
+	assert.Empty(t, stats)
 }
 
 func TestModerationStats(t *testing.T) {

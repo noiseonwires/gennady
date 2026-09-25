@@ -58,7 +58,7 @@ func TestBuildReplyChainFromMessageID_IncludesModerationMarks(t *testing.T) {
 		UserID: 6, ActionType: "delete", ChatID: -100, MessageID: 2, Timestamp: now,
 	}))
 
-	chain, entries := b.buildReplyChainFromMessageID(2, -100, 5)
+	chain, entries := b.buildReplyChainFromMessageID(2, -100, nil, 5)
 	require.Len(t, entries, 2)
 
 	joined := ""
@@ -67,4 +67,34 @@ func TestBuildReplyChainFromMessageID_IncludesModerationMarks(t *testing.T) {
 	}
 	assert.Contains(t, joined, "second")
 	assert.Contains(t, joined, i18n.T("ai.mark_deleted"))
+}
+
+func TestBuildCreativeReplyContext_CurrentTopicOnly(t *testing.T) {
+	b, _ := newMockBot(t)
+	enabled := true
+	b.config.AI.CreativeReplies.ContextOnlyCurrentTopic = &enabled
+	b.config.AI.CreativeReplies.ReplyChainAdjacentWindow = 5
+	now := time.Now()
+	replyToSameTopic := 2
+	replyToOtherTopic := 1
+
+	require.NoError(t, b.db.StoreMessageInfo(&database.MessageInfo{
+		MessageID: 1, ChatID: -100, UserID: 7, Username: "alice", Text: "other topic secret",
+		MessageThreadID: 99, Timestamp: now,
+	}))
+	require.NoError(t, b.db.StoreMessageInfo(&database.MessageInfo{
+		MessageID: 2, ChatID: -100, UserID: 7, Username: "alice", Text: "same topic earlier",
+		ReplyToMessageID: &replyToOtherTopic, MessageThreadID: 42, Timestamp: now.Add(time.Second),
+	}))
+	require.NoError(t, b.db.StoreMessageInfo(&database.MessageInfo{
+		MessageID: 3, ChatID: -100, UserID: 8, Username: "bob", Text: "same topic current",
+		ReplyToMessageID: &replyToSameTopic, MessageThreadID: 42, Timestamp: now.Add(2 * time.Second),
+	}))
+	replyText := "same topic earlier"
+
+	context := b.buildCreativeReplyContext("same topic current", 3, 8, -100, &replyText)
+
+	assert.Contains(t, context, "same topic earlier")
+	assert.Contains(t, context, "same topic current")
+	assert.NotContains(t, context, "other topic secret")
 }

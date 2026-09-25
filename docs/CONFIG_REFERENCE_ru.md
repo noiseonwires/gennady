@@ -67,7 +67,7 @@
 
 | Ключ YAML | ENV | Тип | Описание |
 |---|---|---|---|
-| `night_mode.enabled` | `NIGHT_MODE_ENABLED` | bool | Включено - Включить запланированный «тихий час»: удалять каждое новое сообщение сразу при получении (без анализа и сохранения) и отвечать уведомлением, которое само удаляется. Сообщения от админов и супер-админа не затрагиваются. |
+| `night_mode.enabled` | `NIGHT_MODE_ENABLED` | bool | Включено - Включить запланированный «тихий час»: сразу удалять новые сообщения пользователей без исключения (без анализа и сохранения) и отвечать самоудаляющимся уведомлением. Админы и пользователи с достаточной репутацией могут писать. |
 | `night_mode.start_time` | `NIGHT_MODE_START_TIME` | string | Время начала - Начало окна в 24-часовом формате ЧЧ:ММ (например, 23:00) |
 | `night_mode.end_time` | `NIGHT_MODE_END_TIME` | string | Время окончания - Конец окна в формате ЧЧ:ММ; раньше времени начала = окно через полночь (например, 08:00) |
 | `night_mode.days` | `NIGHT_MODE_DAYS` | []string | Дни - Дни недели, в которые может НАЧИНАТЬСЯ тихий час (monday/mon ...); пусто = каждый день. Окно через полночь относится ко дню, в который оно начинается. |
@@ -77,6 +77,14 @@
 | `night_mode.mute_after_messages` | `NIGHT_MODE_MUTE_AFTER_MESSAGES` | int | Мут после N сообщений - Выдать пользователю мут до конца окна, если он отправит больше указанного числа сообщений в ночном режиме (0 = выкл.) |
 | `night_mode.included_topics` | `NIGHT_MODE_INCLUDED_TOPICS` | []chat_topic | Включённые темы - Пары (чат, тема), где действует ночной режим. Пусто = каждый чат модерации / любая тема. |
 | `night_mode.excluded_topics` | `NIGHT_MODE_EXCLUDED_TOPICS` | []chat_topic | Исключённые темы - Пары (чат, тема), переопределяющие «Включённые темы» - ночной режим их не затрагивает. |
+
+## Ночной режим - исключение по репутации
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `night_mode.reputation_exemption.enabled` | `NIGHT_MODE_REPUTATION_EXEMPTION_ENABLED` | bool | Включено - Разрешить не-админам с достаточной выбранной репутацией писать в ночном режиме (по умолчанию включено) |
+| `night_mode.reputation_exemption.source` | `NIGHT_MODE_REPUTATION_EXEMPTION_SOURCE` | string | Источник - Проверяемая репутация: score, ai или both; both требует прохождения всех глобально включённых систем (по умолчанию: both) |
+| `night_mode.reputation_exemption.minimum_grade` | `NIGHT_MODE_REPUTATION_EXEMPTION_MINIMUM_GRADE` | string | Минимальная оценка - Худшая допустимая оценка: very_bad, bad, neutral, good или very_good (по умолчанию: neutral) |
 
 ## Очистка базы данных
 
@@ -194,13 +202,18 @@
 | `ai.content_moderation.skip_admin_users` | `AI_CONTENT_MODERATION_SKIP_ADMIN_USERS` | bool | Пропускать администраторов - Пропускать модерацию контента для администраторов |
 | `ai.content_moderation.complaint_manual_moderation` | `AI_CONTENT_MODERATION_COMPLAINT_MANUAL_MODERATION` | bool | Ручная модерация по жалобе - Когда пользователь жалуется на сообщение (ответ + упоминание @бота), бот сначала перепроверяет его модерацией ИИ по всем настроенным моделям и действует автоматически, если хоть одна нашла нарушение. Если все модели сочли сообщение чистым: ВКЛ (по умолчанию) отправляет карточку решения администраторам для ручной проверки; ВЫКЛ - жалоба завершается без уведомления. |
 | `ai.content_moderation.default_mute_minutes` | `AI_CONTENT_MODERATION_DEFAULT_MUTE_MINUTES` | int | Длительность авто-мута (мин) - Длительность действия `mute` (по умолчанию: 60, `0` = навсегда) |
+| `ai.content_moderation.admin_notification_delay_seconds` | `AI_CONTENT_MODERATION_ADMIN_NOTIFICATION_DELAY_SECONDS` | int | Задержка уведомления админов (сек) - Ожидание перед проверкой наличия сообщения и уведомлением админ-чата (по умолчанию: 3) |
 | `ai.content_moderation.vision_enabled` | `AI_CONTENT_MODERATION_VISION_ENABLED` | bool | Vision включено - Включить Azure Vision API для анализа изображений |
 | `ai.content_moderation.vision_endpoint` | `AI_CONTENT_MODERATION_VISION_ENDPOINT` | string | Vision эндпоинт - URL эндпоинта Azure Vision API |
 | `ai.content_moderation.vision_api_key` | `AI_CONTENT_MODERATION_VISION_API_KEY` | string 🔒 | Vision API-ключ - API-ключ для Azure Vision |
 | `ai.content_moderation.content_safety_enabled` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_ENABLED` | bool | Content Safety включено - Включить Azure Content Safety API |
 | `ai.content_moderation.content_safety_endpoint` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_ENDPOINT` | string | Content Safety эндпоинт - URL эндпоинта Azure Content Safety API |
 | `ai.content_moderation.content_safety_api_key` | `AI_CONTENT_MODERATION_CONTENT_SAFETY_API_KEY` | string 🔒 | Content Safety API-ключ - API-ключ для Azure Content Safety |
-| `ai.content_moderation.new_user_profile_check_enabled` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_CHECK_ENABLED` | bool | Проверка профиля нового участника - При первом сообщении нового пользователя анализировать весь его публичный профиль (имя, био, фото профиля и привязанный личный канал: название/описание/фото) через AI и анализ изображений (Content Safety → Vision → OCR.space), добавляя отметку в профиль при срабатывании. Работает без Content Safety. |
+| `ai.content_moderation.ai_image_analysis_enabled` | `AI_CONTENT_MODERATION_AI_IMAGE_ANALYSIS_ENABLED` | bool | Анализ изображений ИИ - Анализировать изображения мультимодальными моделями ИИ перед переходом к Azure Vision или OCR.space. Для каждой подходящей модели также нужно включить «Использовать для анализа изображений». По умолчанию: выкл. |
+| `ai.content_moderation.ai_image_analysis_prompt.system` | `AI_CONTENT_MODERATION_AI_IMAGE_ANALYSIS_PROMPT_SYSTEM` | string | Анализ изображений ИИ (системный) - Системный промпт для описания изображений, извлечения видимого текста и выявления потенциально вредного содержимого |
+| `ai.content_moderation.ai_image_analysis_prompt.user` | `AI_CONTENT_MODERATION_AI_IMAGE_ANALYSIS_PROMPT_USER` | string | Анализ изображений ИИ (пользовательский) - Пользовательская инструкция, отправляемая вместе с изображением |
+| `ai.content_moderation.vision_outside_moderation` | `AI_CONTENT_MODERATION_VISION_OUTSIDE_MODERATION` | bool | Анализ изображений вне модерации - Запускать ИИ / Vision / OCR.space для изображений и в тех чатах и топиках, которые исключены из модерации ИИ, чтобы в истории сохранялись распознанный текст и описание. Такие сообщения по-прежнему не модерируются. Каждое фото - один вызов анализа изображений. По умолчанию: выкл. |
+| `ai.content_moderation.new_user_profile_check_enabled` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_CHECK_ENABLED` | bool | Проверка профиля нового участника - При первом сообщении нового пользователя анализировать весь его публичный профиль (имя, био, фото профиля и привязанный личный канал: название/описание/фото) через AI и анализ изображений (Content Safety → мультимодальный ИИ → Vision → OCR.space), добавляя отметку в профиль при срабатывании. Работает без Content Safety. |
 | `ai.content_moderation.new_user_profile_use_full_model` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_USE_FULL_MODEL` | bool | Проверка профиля: полная модель - Оценивать собранный текст профиля полной моделью вместо лёгкой. Лучше распознаёт неочевидные признаки спама/скама/рекламы, но каждый вызов дороже. Влияет только на текстовый вердикт AI; проверка фото не меняется. По умолчанию: выкл (лёгкая модель). |
 | `ai.content_moderation.new_user_profile_prompt.system` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_PROMPT_SYSTEM` | string | Проверка профиля нового участника (системный) - Системный промпт для анализа имени, био, фото и личного канала нового участника |
 | `ai.content_moderation.new_user_profile_prompt.user` | `AI_CONTENT_MODERATION_NEW_USER_PROFILE_PROMPT_USER` | string | Проверка профиля нового участника (пользовательский) - Пользовательский промпт для анализа профиля нового участника (плейсхолдеры: `{{profile_text}}`) |
@@ -215,8 +228,8 @@
 | `ai.content_moderation.ocrspace_engine` | `AI_CONTENT_MODERATION_OCRSPACE_ENGINE` | int | Движок OCR.space - Движок OCR: 1 (по умолчанию), 2 (универсальный, мемы/шумный фон), 3 (макс. точность, рукописный текст, 200+ языков) |
 | `ai.content_moderation.prompt.system` | `AI_CONTENT_MODERATION_PROMPT_SYSTEM` | string | Модерация контента (системный) - Системный промпт для модерации контента (плейсхолдеры: `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reply_to}}`, `{{new_user_rules}}`) |
 | `ai.content_moderation.prompt.user` | `AI_CONTENT_MODERATION_PROMPT_USER` | string | Модерация контента (пользовательский) - Пользовательский промпт для модерации контента (плейсхолдеры: `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reply_to}}`, `{{new_user_rules}}`) |
-| `ai.content_moderation.warning_prompt.system` | `AI_CONTENT_MODERATION_WARNING_PROMPT_SYSTEM` | string | Предупреждение (системный) - Системный промпт для генерации предупреждения (плейсхолдеры: `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{reputation}}`) |
-| `ai.content_moderation.warning_prompt.user` | `AI_CONTENT_MODERATION_WARNING_PROMPT_USER` | string | Предупреждение (пользовательский) - Пользовательский промпт для генерации предупреждения (плейсхолдеры: `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{reputation}}`) |
+| `ai.content_moderation.warning_prompt.system` | `AI_CONTENT_MODERATION_WARNING_PROMPT_SYSTEM` | string | Предупреждение (системный) - Системный промпт для генерации предупреждения (плейсхолдеры: `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}`) |
+| `ai.content_moderation.warning_prompt.user` | `AI_CONTENT_MODERATION_WARNING_PROMPT_USER` | string | Предупреждение (пользовательский) - Пользовательский промпт для генерации предупреждения (плейсхолдеры: `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}`) |
 
 ## ИИ - креативные ответы
 
@@ -224,6 +237,10 @@
 |---|---|---|---|
 | `ai.creative_replies.enabled` | `AI_CREATIVE_REPLIES_ENABLED` | bool | Включено - Включить креативные ответы ИИ на сообщения пользователей |
 | `ai.creative_replies.use_full_model` | `AI_CREATIVE_REPLIES_USE_FULL_MODEL` | bool | Использовать полную модель - Использовать полную модель вместо лёгкой для креативных ответов |
+| `ai.creative_replies.web_search_enabled` | `AI_CREATIVE_REPLIES_WEB_SEARCH_ENABLED` | bool | Поиск в интернете - Разрешить моделям креативных ответов с отметкой «Использовать для поиска в интернете» выполнять поиск при необходимости через Responses API. Поиск увеличивает задержку и стоимость; при сбое используется обычный ответ. Azure использует Grounding with Bing на отдельных условиях, и данные могут покинуть границу соответствия требованиям/региона. По умолчанию: выкл. |
+| `ai.creative_replies.message_tools_enabled` | `AI_CREATIVE_REPLIES_MESSAGE_TOOLS_ENABLED` | bool | Инструменты истории сообщений - Разрешить моделям креативных ответов искать сохранённые сообщения по пользователю, текущей теме, буквальному тексту или включительному диапазону времени. Инструменты доступны только для чтения, ограничены текущим чатом, используют функции Responses API и при отсутствии поддержки возвращаются к обычному ответу. По умолчанию: выкл. |
+| `ai.creative_replies.message_tools_max_limit` | `AI_CREATIVE_REPLIES_MESSAGE_TOOLS_MAX_LIMIT` | int | Макс. результатов инструмента - Максимальное число сообщений за один вызов инструмента истории. Запрошенное моделью число ограничивается этим значением и абсолютным пределом 50. По умолчанию: 20. |
+| `ai.creative_replies.context_only_current_topic` | `AI_CREATIVE_REPLIES_CONTEXT_ONLY_CURRENT_TOPIC` | bool | Контекст только текущей темы - Ограничить весь контекст сообщений для креативных ответов темой/веткой исходного сообщения, включая цепочки ответов, недавнюю историю и историю пользователя, соседние сообщения и инструменты истории. По умолчанию: вкл. |
 | `ai.creative_replies.max_messages` | `AI_CREATIVE_REPLIES_MAX_MESSAGES` | int | Макс. сообщений - Макс. креативных ответов за временное окно (по умолч.: 3) |
 | `ai.creative_replies.time_window` | `AI_CREATIVE_REPLIES_TIME_WINDOW` | int | Временное окно (часы) - Временное окно в часах для ограничения частоты (по умолч.: 3) |
 | `ai.creative_replies.included_topics` | `AI_CREATIVE_REPLIES_INCLUDED_TOPICS` | []chat_topic | Включённые темы - Пары (чат, тема), где разрешены креативные ответы. Пусто = каждый чат модерации / любая тема. Используйте «Любая тема», чтобы включить весь чат, или «Только основная» для основной области. |
@@ -336,11 +353,12 @@
 |---|---|---|---|
 | `ai.user_profiles.enabled` | `AI_USER_PROFILES_ENABLED` | bool | Включено - Включить ежедневную генерацию ИИ-профилей поведения пользователей |
 | `ai.user_profiles.time` | `AI_USER_PROFILES_TIME` | string | Время - Время запуска ежедневной задачи обновления ИИ-профилей (ЧЧ:ММ) |
-| `ai.user_profiles.prompt.system` | `AI_USER_PROFILES_PROMPT_SYSTEM` | string | Новый профиль (системный) - Системный промпт для генерации новых профилей пользователей (плейсхолдеры: `{{username}}`, `{{messages}}`) |
-| `ai.user_profiles.prompt.user` | `AI_USER_PROFILES_PROMPT_USER` | string | Новый профиль (пользовательский) - Пользовательский промпт для генерации новых профилей пользователей (плейсхолдеры: `{{username}}`, `{{messages}}`) |
-| `ai.user_profiles.update_prompt.system` | `AI_USER_PROFILES_UPDATE_PROMPT_SYSTEM` | string | Обновление профиля (системный) - Системный промпт для обновления существующих профилей пользователей (плейсхолдеры: `{{username}}`, `{{messages}}`, `{{existing_profile}}`) |
-| `ai.user_profiles.update_prompt.user` | `AI_USER_PROFILES_UPDATE_PROMPT_USER` | string | Обновление профиля (пользовательский) - Пользовательский промпт для обновления существующих профилей пользователей (плейсхолдеры: `{{username}}`, `{{messages}}`, `{{existing_profile}}`) |
+| `ai.user_profiles.prompt.system` | `AI_USER_PROFILES_PROMPT_SYSTEM` | string | Новый профиль (системный) - Системный промпт для генерации новых профилей пользователей (плейсхолдеры: `{{username}}`, `{{messages}}`, `{{previous_days_messages}}`) |
+| `ai.user_profiles.prompt.user` | `AI_USER_PROFILES_PROMPT_USER` | string | Новый профиль (пользовательский) - Пользовательский промпт для генерации новых профилей пользователей (плейсхолдеры: `{{username}}`, `{{messages}}`, `{{previous_days_messages}}`) |
+| `ai.user_profiles.update_prompt.system` | `AI_USER_PROFILES_UPDATE_PROMPT_SYSTEM` | string | Обновление профиля (системный) - Системный промпт для обновления существующих профилей пользователей (плейсхолдеры: `{{username}}`, `{{messages}}`, `{{existing_profile}}`, `{{previous_days_messages}}`) |
+| `ai.user_profiles.update_prompt.user` | `AI_USER_PROFILES_UPDATE_PROMPT_USER` | string | Обновление профиля (пользовательский) - Пользовательский промпт для обновления существующих профилей пользователей (плейсхолдеры: `{{username}}`, `{{messages}}`, `{{existing_profile}}`, `{{previous_days_messages}}`) |
 | `ai.user_profiles.skip_forever_muted_users` | `AI_USER_PROFILES_SKIP_FOREVER_MUTED_USERS` | bool | Пропускать пользователей с бессрочным мутом - Не создавать и не обновлять ИИ-профили для пользователей с постоянным мутом |
+| `ai.user_profiles.previous_days_messages_count` | `AI_USER_PROFILES_PREVIOUS_DAYS_MESSAGES_COUNT` | int | Сообщения за прошлые дни - Сколько более старых сообщений (до текущего окна анализа) подставлять в плейсхолдер {{previous_days_messages}}; 0 = по умолчанию 10 |
 
 ## Профили пользователей (отслеживание)
 
@@ -348,4 +366,68 @@
 |---|---|---|---|
 | `user_profiles.enabled` | `USER_PROFILES_ENABLED` | bool | Включено - Отслеживать историю изменения имён, дату первого сообщения в каждом чате и активность по дням (независимо от ИИ-профилей) |
 | `user_profiles.disable_username_reuse_alerts` | `USER_PROFILES_DISABLE_USERNAME_REUSE_ALERTS` | bool | Отключить уведомления о повторном использовании @username - Не отправлять в админ-чат уведомление о том, что новый user_id использует @username, ранее принадлежавший другому user_id (отслеживание профилей продолжает работать) |
+
+## Репутация
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `reputation.enabled` | `REPUTATION_ENABLED` | bool | Включено - Включить событийную репутацию отдельно для каждого чата (по умолчанию включено) |
+| `reputation.ai_profile_affects_score` | `REPUTATION_AI_PROFILE_AFFECTS_SCORE` | bool | ИИ-профиль влияет на балл - Учитывать сохранённую оценку ИИ-профиля в баллах событийной репутации (по умолчанию включено) |
+| `reputation.positive_reaction_emojis` | `REPUTATION_POSITIVE_REACTION_EMOJIS` | []string | Положительные реакции - Эмодзи-реакции, повышающие репутацию |
+| `reputation.negative_reaction_emojis` | `REPUTATION_NEGATIVE_REACTION_EMOJIS` | []string | Отрицательные реакции - Эмодзи-реакции, снижающие репутацию |
+| `reputation.clean_messages_per_point` | `REPUTATION_CLEAN_MESSAGES_PER_POINT` | int | Чистых сообщений на балл - Сколько сообщений без срабатываний нужно для восстановления одного балла |
+| `reputation.clean_messages_daily_max` | `REPUTATION_CLEAN_MESSAGES_DAILY_MAX` | int | Дневной лимит чистых сообщений - Сколько сообщений в день может учитываться для восстановления |
+
+## Репутация - веса
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `reputation.weights.positive_reaction` | `REPUTATION_WEIGHTS_POSITIVE_REACTION` | float64 | Вес положительной реакции - Баллы за реакцию до ограничения на сообщение |
+| `reputation.weights.negative_reaction` | `REPUTATION_WEIGHTS_NEGATIVE_REACTION` | float64 | Вес отрицательной реакции - Баллы за реакцию до ограничения на сообщение |
+| `reputation.weights.delete` | `REPUTATION_WEIGHTS_DELETE` | float64 | Вес удаления - Штраф за подтверждённое удаление сообщения |
+| `reputation.weights.warning` | `REPUTATION_WEIGHTS_WARNING` | float64 | Вес предупреждения - Штраф за подтверждённое предупреждение |
+| `reputation.weights.short_mute` | `REPUTATION_WEIGHTS_SHORT_MUTE` | float64 | Вес короткого мута - Штраф за мут короче 24 часов |
+| `reputation.weights.long_mute` | `REPUTATION_WEIGHTS_LONG_MUTE` | float64 | Вес долгого мута - Штраф за мут от 24 часов |
+| `reputation.weights.permanent_mute` | `REPUTATION_WEIGHTS_PERMANENT_MUTE` | float64 | Вес бессрочного мута - Штраф за бессрочный мут |
+| `reputation.weights.clean_recovery` | `REPUTATION_WEIGHTS_CLEAN_RECOVERY` | float64 | Восстановление - Баллы за интервал сообщений без нарушений; не поднимает выше нейтрального уровня |
+| `reputation.weights.profile_screening_text` | `REPUTATION_WEIGHTS_PROFILE_SCREENING_TEXT` | float64 | Текст проверки профиля - Постоянная глобальная поправка за подозрительную находку в тексте Telegram-профиля |
+| `reputation.weights.profile_screening_photo` | `REPUTATION_WEIGHTS_PROFILE_SCREENING_PHOTO` | float64 | Фото проверки профиля - Постоянная глобальная поправка за находку Content Safety на фото профиля или канала |
+| `reputation.weights.ai_very_bad` | `REPUTATION_WEIGHTS_AI_VERY_BAD` | float64 | ИИ: очень плохая - Слабая поправка для оценки very_bad из ИИ-профиля |
+| `reputation.weights.ai_bad` | `REPUTATION_WEIGHTS_AI_BAD` | float64 | ИИ: плохая - Слабая поправка для оценки bad из ИИ-профиля |
+| `reputation.weights.ai_neutral` | `REPUTATION_WEIGHTS_AI_NEUTRAL` | float64 | ИИ: нейтральная - Поправка для оценки neutral из ИИ-профиля |
+| `reputation.weights.ai_good` | `REPUTATION_WEIGHTS_AI_GOOD` | float64 | ИИ: хорошая - Слабая поправка для оценки good из ИИ-профиля |
+| `reputation.weights.ai_very_good` | `REPUTATION_WEIGHTS_AI_VERY_GOOD` | float64 | ИИ: очень хорошая - Слабая поправка для оценки very_good из ИИ-профиля |
+
+## Репутация - полураспад
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `reputation.half_life_days.reaction` | `REPUTATION_HALF_LIFE_DAYS_REACTION` | float64 | Полураспад реакций - Число дней до уменьшения влияния реакций вдвое; 0 отключает затухание |
+| `reputation.half_life_days.delete` | `REPUTATION_HALF_LIFE_DAYS_DELETE` | float64 | Полураспад удаления - Число дней до уменьшения влияния удаления вдвое; 0 отключает затухание |
+| `reputation.half_life_days.warning` | `REPUTATION_HALF_LIFE_DAYS_WARNING` | float64 | Полураспад предупреждения - Число дней до уменьшения влияния предупреждения вдвое; 0 отключает затухание |
+| `reputation.half_life_days.mute` | `REPUTATION_HALF_LIFE_DAYS_MUTE` | float64 | Полураспад мута - Число дней до уменьшения влияния мута вдвое; 0 отключает затухание |
+| `reputation.half_life_days.ai` | `REPUTATION_HALF_LIFE_DAYS_AI` | float64 | Полураспад ИИ - Число дней до уменьшения влияния оценки ИИ вдвое; 0 отключает затухание |
+
+## Репутация - ограничения
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `reputation.limits.min_score` | `REPUTATION_LIMITS_MIN_SCORE` | float64 | Минимальный балл - Нижняя граница итогового балла |
+| `reputation.limits.max_score` | `REPUTATION_LIMITS_MAX_SCORE` | float64 | Максимальный балл - Верхняя граница итогового балла |
+| `reputation.limits.community_min` | `REPUTATION_LIMITS_COMMUNITY_MIN` | float64 | Минимум сообщества - Нижняя граница суммарного влияния реакций |
+| `reputation.limits.community_max` | `REPUTATION_LIMITS_COMMUNITY_MAX` | float64 | Максимум сообщества - Верхняя граница суммарного влияния реакций |
+| `reputation.limits.ai_min` | `REPUTATION_LIMITS_AI_MIN` | float64 | Минимум ИИ - Нижняя граница влияния ИИ-профиля |
+| `reputation.limits.ai_max` | `REPUTATION_LIMITS_AI_MAX` | float64 | Максимум ИИ - Верхняя граница влияния ИИ-профиля |
+| `reputation.limits.profile_screening_min` | `REPUTATION_LIMITS_PROFILE_SCREENING_MIN` | float64 | Минимум проверки профиля - Нижняя граница постоянного влияния проверки Telegram-профиля |
+| `reputation.limits.recovery_max` | `REPUTATION_LIMITS_RECOVERY_MAX` | float64 | Максимум восстановления - Максимум баллов за чистое поведение |
+| `reputation.limits.reaction_per_message` | `REPUTATION_LIMITS_REACTION_PER_MESSAGE` | float64 | Лимит реакций на сообщение - Максимальный модуль баллов одной полярности для одного сообщения |
+
+## Репутация - пороги
+
+| Ключ YAML | ENV | Тип | Описание |
+|---|---|---|---|
+| `reputation.thresholds.very_bad` | `REPUTATION_THRESHOLDS_VERY_BAD` | float64 | Порог very_bad - Баллы не выше этого значения считаются very_bad |
+| `reputation.thresholds.bad` | `REPUTATION_THRESHOLDS_BAD` | float64 | Порог bad - Баллы ниже этого значения считаются bad |
+| `reputation.thresholds.good` | `REPUTATION_THRESHOLDS_GOOD` | float64 | Порог good - Баллы выше этого значения считаются good |
+| `reputation.thresholds.very_good` | `REPUTATION_THRESHOLDS_VERY_GOOD` | float64 | Порог very_good - Баллы не ниже этого значения считаются very_good |
 

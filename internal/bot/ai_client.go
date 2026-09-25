@@ -19,10 +19,28 @@ import (
 
 // AzureOpenAIRequest represents the request structure for Azure OpenAI API.
 type AzureOpenAIRequest struct {
-	Model       string    `json:"model,omitempty"` // required by the standard OpenAI API; omitted for Azure (deployment is in the URL)
-	Messages    []Message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
+	Model       string             `json:"model,omitempty"` // required by the standard OpenAI API; omitted for Azure (deployment is in the URL)
+	Messages    []AIRequestMessage `json:"messages"`
+	MaxTokens   int                `json:"max_tokens,omitempty"`
+	Temperature float64            `json:"temperature,omitempty"`
+}
+
+// AIRequestMessage keeps request content flexible enough for both ordinary
+// text and multimodal content parts. Responses remain strongly typed as Message.
+type AIRequestMessage struct {
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"`
+}
+
+type AIMessageContentPart struct {
+	Type     string      `json:"type"`
+	Text     string      `json:"text,omitempty"`
+	ImageURL *AIImageURL `json:"image_url,omitempty"`
+}
+
+type AIImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // Message represents a message in an AI conversation.
@@ -325,6 +343,14 @@ func (b *Bot) callAzureOpenAINoFallback(service string, prompt string, systemPro
 
 // callAzureOpenAIWithConfig makes a request to Azure OpenAI API with specific model config.
 func (b *Bot) callAzureOpenAIWithConfig(service string, prompt string, systemPrompt string, modelConfig config.AIModelConfig, maxTokens int, isFallback bool) (string, error) {
+	messages := []AIRequestMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: prompt},
+	}
+	return b.callAzureOpenAIWithMessagesWithConfig(service, messages, prompt, systemPrompt, modelConfig, maxTokens, isFallback)
+}
+
+func (b *Bot) callAzureOpenAIWithMessagesWithConfig(service string, messages []AIRequestMessage, prompt string, systemPrompt string, modelConfig config.AIModelConfig, maxTokens int, isFallback bool) (string, error) {
 	// Last line of defense: a model marked disabled is never contacted, no
 	// matter which code path selected it.
 	if !modelConfig.IsEnabled() {
@@ -347,11 +373,6 @@ func (b *Bot) callAzureOpenAIWithConfig(service string, prompt string, systemPro
 		url = fmt.Sprintf("%s/openai/deployments/%s/chat/completions?api-version=2024-02-15-preview",
 			strings.TrimSuffix(modelConfig.Endpoint, "/"),
 			modelConfig.DeploymentName)
-	}
-
-	messages := []Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: prompt},
 	}
 
 	requestBody := AzureOpenAIRequest{
@@ -379,6 +400,34 @@ func (b *Bot) callAzureOpenAIWithConfig(service string, prompt string, systemPro
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
 		return "", fmt.Errorf("error marshaling request: %v", err)
+	}
+	logData := jsonData
+	logRequest := requestBody
+	logRequest.Messages = make([]AIRequestMessage, len(messages))
+	copy(logRequest.Messages, messages)
+	redacted := false
+	for messageIndex, message := range logRequest.Messages {
+		parts, ok := message.Content.([]AIMessageContentPart)
+		if !ok {
+			continue
+		}
+		partsCopy := make([]AIMessageContentPart, len(parts))
+		copy(partsCopy, parts)
+		for partIndex := range partsCopy {
+			if partsCopy[partIndex].ImageURL == nil || !strings.HasPrefix(partsCopy[partIndex].ImageURL.URL, "data:image/") {
+				continue
+			}
+			imageURL := *partsCopy[partIndex].ImageURL
+			imageURL.URL = "[inline image omitted]"
+			partsCopy[partIndex].ImageURL = &imageURL
+			redacted = true
+		}
+		logRequest.Messages[messageIndex].Content = partsCopy
+	}
+	if redacted {
+		if sanitized, marshalErr := json.Marshal(logRequest); marshalErr == nil {
+			logData = sanitized
+		}
 	}
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
@@ -410,7 +459,7 @@ func (b *Bot) callAzureOpenAIWithConfig(service string, prompt string, systemPro
 	res, err := b.doAPI(apiRequest{
 		Service: aiService,
 		Request: req,
-		LogBody: jsonData,
+		LogBody: logData,
 		Client:  &http.Client{Timeout: timeout},
 	})
 	if err != nil {
@@ -469,8 +518,8 @@ func (b *Bot) recordTokenUsage(service, model string, usage *AzureOpenAIUsage) {
 // context and calls the specified model, returning the raw LLM response.
 // newUserRules is injected into the {{new_user_rules}} placeholder (empty for
 // established users).
-func (b *Bot) callContentModeration(messageText, userProfile, userReputation, replyToText, newUserRules string, model config.AIModelConfigs, chatID int64) (string, error) {
-	replacements := map[string]string{"message": messageText, "chat_rules": b.config.ChatRulesFor(chatID), "user_profile": userProfile, "user_reputation": userReputation, "reply_to": replyToText, "new_user_rules": newUserRules}
+func (b *Bot) callContentModeration(messageText, userProfile, userReputation, reputationScore, reputationGrade, replyToText, newUserRules string, model config.AIModelConfigs, chatID int64) (string, error) {
+	replacements := map[string]string{"message": messageText, "chat_rules": b.config.ChatRulesFor(chatID), "user_profile": userProfile, "user_reputation": userReputation, "reputation_score": reputationScore, "reputation_grade": reputationGrade, "reply_to": replyToText, "new_user_rules": newUserRules}
 	systemPrompt := applyReplacements(b.config.AI.ContentModeration.Prompt.System, replacements)
 	prompt := applyReplacements(b.config.AI.ContentModeration.Prompt.User, replacements)
 	return b.callAzureOpenAIWithRetries("content_moderation", prompt, systemPrompt, model, 50, 3)
@@ -481,8 +530,8 @@ func (b *Bot) callContentModeration(messageText, userProfile, userReputation, re
 // included, it retries once without the reply_to text - the quoted message may
 // itself be the offending content rather than the message under moderation, so
 // we don't want to penalize the replier for what they're replying to.
-func (b *Bot) callContentModerationWithReplyRetry(messageText, userProfile, userReputation, replyToText, newUserRules string, model config.AIModelConfigs, modelLabel string, chatID int64) (string, error) {
-	response, err := b.callContentModeration(messageText, userProfile, userReputation, replyToText, newUserRules, model, chatID)
+func (b *Bot) callContentModerationWithReplyRetry(messageText, userProfile, userReputation, reputationScore, reputationGrade, replyToText, newUserRules string, model config.AIModelConfigs, modelLabel string, chatID int64) (string, error) {
+	response, err := b.callContentModeration(messageText, userProfile, userReputation, reputationScore, reputationGrade, replyToText, newUserRules, model, chatID)
 	if err == nil || replyToText == "" {
 		return response, err
 	}
@@ -491,7 +540,7 @@ func (b *Bot) callContentModerationWithReplyRetry(messageText, userProfile, user
 		return response, err
 	}
 	log.Printf("⚠️ Content filter triggered by Azure AI (%s) with reply_to context - retrying without reply_to", modelLabel)
-	return b.callContentModeration(messageText, userProfile, userReputation, "", newUserRules, model, chatID)
+	return b.callContentModeration(messageText, userProfile, userReputation, reputationScore, reputationGrade, "", newUserRules, model, chatID)
 }
 
 // analyzeMessageContentWithModel runs the content-moderation prompt against the
@@ -505,9 +554,10 @@ func (b *Bot) analyzeMessageContentWithModel(messageText string, userID int64, c
 	}
 
 	userProfile := b.getUserProfileForModeration(userID, chatID)
-	userReputation := b.getUserReputationForModeration(userID)
+	userReputation := b.getUserReputationForModeration(userID, chatID)
+	reputationGrade, reputationScore := b.reputationPromptValues(userID, chatID)
 	newUserRules := b.newUserRulesFor(userID)
-	response, err := b.callContentModerationWithReplyRetry(messageText, userProfile, userReputation, replyToText, newUserRules, model, modelLabel, chatID)
+	response, err := b.callContentModerationWithReplyRetry(messageText, userProfile, userReputation, reputationScore, reputationGrade, replyToText, newUserRules, model, modelLabel, chatID)
 	if err != nil {
 		var cfErr *ContentFilterError
 		if errors.As(err, &cfErr) {
@@ -605,18 +655,25 @@ func (b *Bot) matchContentSecurityRules() []config.ModerationRule {
 }
 
 // generateWarningNotification generates a personalized warning notification using AI.
-func (b *Bot) generateWarningNotification(userDisplayName, userMessage, muteInfo, reputation string, chatID int64) (string, error) {
+func (b *Bot) generateWarningNotification(userDisplayName, userMessage, muteInfo string, userID, chatID int64) (string, error) {
 	userMessagePart := ""
 	if userMessage != "" {
 		userMessagePart = i18n.Tf("ai.warn_user_message", userMessage)
 	}
 
+	reputationGrade, reputationScore := b.reputationPromptValues(userID, chatID)
+	userProfile := b.getUserProfileForModeration(userID, chatID)
+	userReputation := b.getUserReputationForModeration(userID, chatID)
 	replacements := map[string]string{
-		"username":     userDisplayName,
-		"user_message": userMessagePart,
-		"chat_rules":   b.config.ChatRulesFor(chatID),
-		"mute_info":    muteInfo,
-		"reputation":   reputation,
+		"username":         userDisplayName,
+		"user_message":     userMessagePart,
+		"chat_rules":       b.config.ChatRulesFor(chatID),
+		"mute_info":        muteInfo,
+		"reputation":       reputationGrade,
+		"user_profile":     userProfile,
+		"user_reputation":  userReputation,
+		"reputation_score": reputationScore,
+		"reputation_grade": reputationGrade,
 	}
 	systemPrompt := applyReplacements(b.config.AI.ContentModeration.WarningPrompt.System, replacements)
 	prompt := applyReplacements(b.config.AI.ContentModeration.WarningPrompt.User, replacements)

@@ -99,8 +99,9 @@ func (b *Bot) stageCruelMute(mc *MsgContext) Direction {
 // notice that self-deletes after night_mode.reply_delete_seconds. A user who
 // keeps posting past night_mode.mute_after_messages is muted until the window
 // ends. Edits, service messages, the Telegram service account and messages from
-// admins (including the super-admin) are exempt, and the pipeline stops so no
-// later stage records or moderates the message.
+// admins (including the super-admin) and users who meet the configured
+// reputation exemption are allowed through. For blocked messages the pipeline
+// stops so no later stage records or moderates them.
 func (b *Bot) stageNightMode(mc *MsgContext) Direction {
 	if mc.IsEdited || mc.Scope.IsService {
 		return Continue
@@ -119,6 +120,9 @@ func (b *Bot) stageNightMode(mc *MsgContext) Direction {
 		// the Telegram API, so it is deliberately done only after confirming the
 		// window is active (night-mode traffic is low by design).
 		if b.isUserAdmin(mc.Msg.From.ID) {
+			return Continue
+		}
+		if b.nightModeReputationExempt(mc.Msg.From.ID, mc.Msg.Chat.ID) {
 			return Continue
 		}
 	}
@@ -145,24 +149,32 @@ func (b *Bot) stagePrepareDeletion(mc *MsgContext) Direction {
 }
 
 // stageEnhance resolves the text fed to moderation: the raw text (or caption),
-// optionally enriched with vision/OCR analysis. Vision/OCR and the
-// Content-Safety image route are moderation-only and skipped when the
-// (chat, topic) is excluded from moderation. It builds EnhancedMsg from the
+// optionally enriched with AI/vision/OCR analysis. It builds EnhancedMsg from the
 // resulting text so later stages operate on the enriched copy.
 //
 // Moderation exclusion (moderation.excluded_topics, incl. topic: -1 for a whole
 // chat) only turns off AI moderation; the message is still recorded and the
 // other, independently-scoped features still run. Each of those self-gates on
 // its own scope predicate, and the moderate stage self-gates on Scope.Moderate.
+// Image analysis normally follows moderation, but
+// ai.content_moderation.vision_outside_moderation opts excluded (chat, topic)
+// pairs back in so their history keeps the OCR text. It also keeps that history
+// enrichment for whitelisted senders, while the Content-Safety image route and
+// text moderation stay moderation-only.
 func (b *Bot) stageEnhance(mc *MsgContext) Direction {
-	enhancedText := mc.Msg.Text
-	if enhancedText == "" {
-		enhancedText = mc.Msg.Caption
-	}
+	enhancedText := mc.Msg.TextWithEntityLinks()
 
-	skipVision := mc.Scope.Whitelisted && !b.config.AI.DailySummary.Enabled
-	if mc.Scope.Moderate && b.config.AI.Enabled && !skipVision && (b.config.AI.ContentModeration.VisionEnabled || b.config.AI.ContentModeration.OCRSpaceEnabled) {
-		enhancedText, mc.Flagged = b.processMessageEnhancements(mc.Msg)
+	historyNeedsImageAnalysis := b.config.AI.DailySummary.Enabled || b.config.AI.ContentModeration.VisionOutsideModeration
+	skipImageAnalysis := mc.Scope.Whitelisted && !historyNeedsImageAnalysis
+	imageAnalysisScope := mc.Scope.Moderate ||
+		(mc.Scope.InModerationChat && b.config.AI.ContentModeration.VisionOutsideModeration)
+	imageAnalysisEnabled := b.config.AI.ContentModeration.AIImageAnalysisEnabled ||
+		b.config.AI.ContentModeration.VisionEnabled ||
+		b.config.AI.ContentModeration.OCRSpaceEnabled
+	if imageAnalysisScope && b.config.AI.Enabled && !skipImageAnalysis && imageAnalysisEnabled {
+		var flagged bool
+		enhancedText, flagged = b.processMessageEnhancements(mc.Msg)
+		mc.Flagged = flagged && mc.Scope.Moderate
 	}
 
 	mc.Enhanced = enhancedText
@@ -193,6 +205,9 @@ func (b *Bot) stageModerate(mc *MsgContext) Direction {
 	}
 
 	mc.Moderated = b.analyzeMessage(mc)
+	if !mc.Moderated && !mc.IsEdited && mc.Msg.From != nil {
+		b.recordCleanReputationMessage(mc.Msg.From.ID, mc.Msg.Chat.ID)
+	}
 	if !mc.IsEdited && mc.AddToDeletion {
 		mc.deletionHandled = true
 	}
@@ -235,22 +250,28 @@ func (b *Bot) features() []feature {
 	b.featOnce.Do(func() {
 		b.featCache = []feature{
 			{
-				name:    "message_summary",
-				applies: func(mc *MsgContext) bool { return !mc.IsEdited && b.config.AI.Enabled && b.config.AI.MessageSummaries.Enabled },
-				run:     b.runMessageSummary,
+				name: "message_summary",
+				applies: func(mc *MsgContext) bool {
+					return !mc.IsEdited && b.config.AI.Enabled && b.config.AI.MessageSummaries.Enabled
+				},
+				run: b.runMessageSummary,
 			},
 			// link_summary must precede creative_reply so the extracted link content
 			// (stored on the message's extra_info by link_summary) is available to the
 			// creative reply's reply-chain context.
 			{
-				name:    "link_summary",
-				applies: func(mc *MsgContext) bool { return !mc.IsEdited && b.config.AI.Enabled && b.config.AI.LinkSummaries.Enabled },
-				run:     b.runLinkSummary,
+				name: "link_summary",
+				applies: func(mc *MsgContext) bool {
+					return !mc.IsEdited && b.config.AI.Enabled && b.config.AI.LinkSummaries.Enabled
+				},
+				run: b.runLinkSummary,
 			},
 			{
-				name:    "creative_reply",
-				applies: func(mc *MsgContext) bool { return !mc.IsEdited && b.config.AI.Enabled && b.config.AI.CreativeReplies.Enabled },
-				run:     b.runCreativeReply,
+				name: "creative_reply",
+				applies: func(mc *MsgContext) bool {
+					return !mc.IsEdited && b.config.AI.Enabled && b.config.AI.CreativeReplies.Enabled
+				},
+				run: b.runCreativeReply,
 			},
 		}
 	})
@@ -278,7 +299,7 @@ func (b *Bot) runMessageSummary(mc *MsgContext) {
 // within the shared features goroutine, before the creative-reply feature, so
 // the extracted content is in place when the creative reply builds its context.
 func (b *Bot) runLinkSummary(mc *MsgContext) {
-	b.extractAndStoreLinksContent(mc.Msg)
+	b.extractAndStoreLinksContent(mc.EnhancedMsg)
 }
 
 // runCreativeReply posts a creative follow-up reply. It runs after the

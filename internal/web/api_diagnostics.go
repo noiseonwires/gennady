@@ -113,6 +113,28 @@ func (h *apiHandler) handleGetTokenUsage(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+func (h *apiHandler) handleCleanupTokenUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeWebErr(w, errMethodNotAllowed)
+		return
+	}
+
+	models := make([]string, 0, len(h.config.AI.LightModel.Configs)+len(h.config.AI.FullModel.Configs))
+	for _, model := range h.config.AI.LightModel.Configs {
+		models = append(models, model.DeploymentName)
+	}
+	for _, model := range h.config.AI.FullModel.Configs {
+		models = append(models, model.DeploymentName)
+	}
+
+	deleted, err := h.db.DeleteTokenUsageForUnconfiguredModels(models)
+	if err != nil {
+		writeWebErrf(w, errGetTableStatsFailed, "failed to clean up token usage: %v", err)
+		return
+	}
+	jsonResponse(w, map[string]int64{"deleted_rows": deleted})
+}
+
 // handleGetModerationStats returns the moderation funnel counters (received,
 // light-flagged, full-confirmed, auto-actioned, manually cleared, manually
 // actioned) for today / yesterday / the day before / all time. The day keys
@@ -363,6 +385,57 @@ func (h *apiHandler) handleDebugModeration(w http.ResponseWriter, r *http.Reques
 		"system_prompt":    sys,
 		"user_prompt":      usr,
 		"response":         resp,
+		"response_time_ms": time.Since(start).Milliseconds(),
+	}
+	if err != nil {
+		out["error"] = err.Error()
+	}
+	jsonResponse(w, out)
+}
+
+// handleDebugCreativeReply renders and runs the configured creative-reply
+// prompt against one model and returns any provider-exposed tool metadata.
+func (h *apiHandler) handleDebugCreativeReply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeWebErr(w, errMethodNotAllowed)
+		return
+	}
+	const prefix = "/api/diagnostics/debug/creative/"
+	idx := strings.Index(r.URL.Path, prefix)
+	if idx < 0 {
+		writeWebErr(w, errMissingServiceName)
+		return
+	}
+	service := strings.TrimPrefix(r.URL.Path[idx:], prefix)
+	if service == "" {
+		writeWebErr(w, errMissingServiceName)
+		return
+	}
+	if h.apiTester == nil {
+		writeWebErr(w, errAPITesterUnavailable)
+		return
+	}
+	body, err := decodeJSONLimited[struct {
+		Message string `json:"message"`
+		ChatID  int64  `json:"chat_id"`
+		TopicID int    `json:"topic_id"`
+	}](r, 1<<20)
+	if err != nil {
+		writeWebErrf(w, errInvalidJSONBody, "%v", err)
+		return
+	}
+	if strings.TrimSpace(body.Message) == "" {
+		writeWebErr(w, errMessageContentRequired)
+		return
+	}
+	start := time.Now()
+	sys, usr, resp, details, err := h.apiTester.DebugCreativeReply(service, body.Message, body.ChatID, body.TopicID)
+	out := map[string]interface{}{
+		"service":          service,
+		"system_prompt":    sys,
+		"user_prompt":      usr,
+		"response":         resp,
+		"details":          details,
 		"response_time_ms": time.Since(start).Milliseconds(),
 	}
 	if err != nil {

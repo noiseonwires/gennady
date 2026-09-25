@@ -24,8 +24,8 @@
     <script defer src="js/page-config.js"></script>
     <script defer src="js/page-config-editors.js"></script>
     <script defer src="js/page-logs-system.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"
-            onerror="var s=document.createElement('script');s.defer=true;s.src='https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.15.0/cdn.min.js';document.head.appendChild(s)"></script>
+        <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.17.2/dist/cdn.min.js"
+            onerror="var s=document.createElement('script');s.defer=true;s.src='https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.17.2/cdn.min.js';document.head.appendChild(s)"></script>
 </head>
 <body x-data x-cloak>
 
@@ -373,6 +373,9 @@
                                         <template x-if="m.message_thread_id">
                                             <span x-text="' · ' + $store.i18n.t('msg_topic') + ': ' + (m.topic_name || ('#' + m.message_thread_id))" :title="'#' + m.message_thread_id"></span>
                                         </template>
+                                        <template x-if="m.media_group_id">
+                                            <span x-text="' · 🖼 ' + $store.i18n.t('msg_album')" :title="m.media_group_id"></span>
+                                        </template>
                                     </div>
                                     <template x-if="m.reply_to_message_id && m.reply_to_message_id !== m.message_thread_id">
                                         <div class="msg-reply-chain" x-data="replyChain(m)">
@@ -499,6 +502,7 @@
                         <span class="prof-sort-label" x-text="$store.i18n.t('prof_sort') + ':'"></span>
                         <button class="prof-sort-btn" :class="sort === 'discovery' ? 'active' : ''" @click="setSort('discovery')" x-text="$store.i18n.t('prof_sort_discovery')"></button>
                         <button class="prof-sort-btn" :class="sort === 'name' ? 'active' : ''" @click="setSort('name')" x-text="$store.i18n.t('prof_sort_name')"></button>
+                        <button class="prof-sort-btn" :class="sort === 'score' ? 'active' : ''" @click="setSort('score')" x-text="$store.i18n.t('prof_sort_score')"></button>
                         <span class="prof-search-wrap">
                             <input type="search" class="prof-search" x-model="search" @input.debounce.350ms="doSearch()"
                                    :placeholder="$store.i18n.t('prof_search_placeholder')">
@@ -519,9 +523,14 @@
                                 <div class="msg-card">
                                     <div class="msg-card-header">
                                         <span class="msg-card-user" x-text="profileLabel(p)"></span>
-                                        <span style="display:flex;align-items:center;gap:.5rem">
+                                        <span style="display:flex;align-items:center;justify-content:flex-end;gap:.5rem;flex-wrap:wrap">
                                             <button class="msg-icon-btn" @click="$store.app.showUserMessages(p.user_id)" :title="$store.i18n.t('prof_view_messages')">💬</button>
-                                            <span class="badge" :class="reputationClass(p.reputation)" x-text="p.reputation"></span>
+                                            <template x-if="p.profile">
+                                                <span class="badge" :class="reputationClass(p.reputation)" x-text="$store.i18n.t('prof_ai_reputation') + ': ' + p.reputation"></span>
+                                            </template>
+                                            <template x-for="score in (p.reputation_scores || [])" :key="score.chat_id">
+                                                <span class="badge" :class="reputationClass(score.grade)" x-text="reputationScoreLabel(score)"></span>
+                                            </template>
                                             <button class="msg-delete-btn" @click="deleteProfile(p)" :title="$store.i18n.t('prof_delete')">&#x2715;</button>
                                         </span>
                                     </div>
@@ -827,12 +836,17 @@
                                         <span x-text="$store.i18n.t('diag_never')"></span>
                                     </template>
                                 </div>
-                                <button class="test-btn" x-show="!$store.app.isModerator" @click="testSvc(m.service_key)"
-                                    :disabled="testingKey === m.service_key"
-                                    x-text="testingKey === m.service_key ? $store.i18n.t('diag_testing') : $store.i18n.t('diag_test')"></button>
-                                <button class="test-btn" x-show="!$store.app.isModerator" style="margin-left:.4rem"
-                                    @click="openDebug('moderation', m.service_key, (m.type === 'light' ? 'Light' : 'Full') + ' #' + (m.index + 1) + ': ' + m.deployment)"
-                                    x-text="$store.i18n.t('diag_debug')"></button>
+                                <div class="diag-actions" x-show="!$store.app.isModerator">
+                                    <button class="test-btn" @click="testSvc(m.service_key)"
+                                        :disabled="testingKey === m.service_key"
+                                        x-text="testingKey === m.service_key ? $store.i18n.t('diag_testing') : $store.i18n.t('diag_test')"></button>
+                                    <button class="test-btn"
+                                        @click="openDebug('moderation', m.service_key, (m.type === 'light' ? 'Light' : 'Full') + ' #' + (m.index + 1) + ': ' + m.deployment)"
+                                        x-text="$store.i18n.t('diag_debug_moderation')"></button>
+                                    <button class="test-btn"
+                                        @click="openDebug('creative', m.service_key, (m.type === 'light' ? 'Light' : 'Full') + ' #' + (m.index + 1) + ': ' + m.deployment)"
+                                        x-text="$store.i18n.t('diag_debug_creative')"></button>
+                                </div>
                             </div>
                         </template>
                     </div>
@@ -867,7 +881,14 @@
                 </template>
 
                 <!-- Token Usage -->
-                <h2 x-text="$store.i18n.t('diag_token_usage')"></h2>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem">
+                    <h2 x-text="$store.i18n.t('diag_token_usage')"></h2>
+                    <button x-show="!$store.auth.moderator"
+                            class="remove-btn"
+                            :disabled="tokenCleanupRunning"
+                            @click="cleanupTokenUsage()"
+                            x-text="tokenCleanupRunning ? $store.i18n.t('diag_token_cleanup_running') : $store.i18n.t('diag_token_cleanup')"></button>
+                </div>
                 <template x-if="!tokenUsage.services || tokenUsage.services.length === 0">
                     <div x-text="$store.i18n.t('diag_no_data')"></div>
                 </template>
@@ -963,14 +984,14 @@
                         <div class="msg-popup" style="width: min(95vw, 800px)">
                             <div class="msg-popup-header">
                                 <strong>
-                                    <span x-text="debugMode === 'moderation' ? $store.i18n.t('diag_debug_mod_title') : (debugMode === 'ocr' ? $store.i18n.t('diag_debug_ocr_title') : $store.i18n.t('diag_debug_ext_title'))"></span>
+                                    <span x-text="debugTitle()"></span>
                                     <span style="color:var(--text2);font-weight:400"> - </span>
                                     <span x-text="debugServiceLabel"></span>
                                 </strong>
                                 <button @click="closeDebug()" class="msg-popup-close">&times;</button>
                             </div>
                             <div class="msg-popup-body">
-                                <label x-show="debugMode !== 'moderation'" style="display:block;font-size:.85rem;color:var(--text2);margin-bottom:.25rem"
+                                <label x-show="debugMode !== 'moderation' && debugMode !== 'creative'" style="display:block;font-size:.85rem;color:var(--text2);margin-bottom:.25rem"
                                     x-text="debugMode === 'ocr' ? $store.i18n.t('diag_debug_image_label') : $store.i18n.t('diag_debug_url_label')"></label>
                                 <template x-if="debugMode === 'moderation'">
                                     <div>
@@ -992,10 +1013,32 @@
                                             <div style="display:flex;gap:.5rem;flex-wrap:wrap">
                                                 <input type="number" x-model="debugMessageId" style="flex:1;min-width:140px"
                                                     :placeholder="$store.i18n.t('diag_debug_msgid_placeholder')" />
-                                                <input type="number" x-model="debugChatId" style="flex:1;min-width:140px"
-                                                    :placeholder="$store.i18n.t('diag_debug_chatid_placeholder')" />
+                                                <select x-model="debugChatId" style="flex:1;min-width:180px">
+                                                    <option value="" x-text="$store.i18n.t('diag_debug_chatid_placeholder')"></option>
+                                                    <template x-for="chat in $store.app.chats" :key="chat.id">
+                                                        <option :value="String(chat.id)" x-text="(chat.title || ('#' + chat.id)) + ' (' + chat.id + ')'"> </option>
+                                                    </template>
+                                                </select>
                                             </div>
                                         </template>
+                                    </div>
+                                </template>
+                                <template x-if="debugMode === 'creative'">
+                                    <div>
+                                        <textarea x-model="debugInput" rows="4" style="width:100%;font-family:inherit"
+                                            :placeholder="$store.i18n.t('diag_debug_creative_placeholder')"></textarea>
+                                        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
+                                            <select x-model="debugChatId" style="flex:1;min-width:180px">
+                                                <option value="" x-text="$store.i18n.t('diag_debug_creative_chatid_placeholder')"></option>
+                                                <template x-for="chat in $store.app.chats" :key="chat.id">
+                                                    <option :value="String(chat.id)" x-text="(chat.title || ('#' + chat.id)) + ' (' + chat.id + ')'"> </option>
+                                                </template>
+                                            </select>
+                                            <input type="number" x-model="debugTopicId" style="flex:1;min-width:140px"
+                                                :placeholder="$store.i18n.t('diag_debug_creative_topicid_placeholder')" />
+                                        </div>
+                                        <div style="color:var(--text2);font-size:.8rem;margin-top:.25rem"
+                                            x-text="$store.i18n.t('diag_debug_creative_scope_hint')"></div>
                                     </div>
                                 </template>
                                 <template x-if="debugMode === 'extract'">
@@ -1047,25 +1090,99 @@
                                     </div>
                                 </template>
 
-                                <template x-if="debugResult && debugMode === 'moderation' && debugResult.system_prompt">
+                                <template x-if="debugResult && (debugMode === 'moderation' || debugMode === 'creative') && debugResult.system_prompt">
                                     <div style="margin-top:.75rem">
                                         <div style="font-size:.85rem;color:var(--text2)" x-text="$store.i18n.t('diag_debug_system')"></div>
                                         <div class="msg-popup-text" x-text="debugResult.system_prompt"></div>
                                     </div>
                                 </template>
-                                <template x-if="debugResult && debugMode === 'moderation' && debugResult.user_prompt">
+                                <template x-if="debugResult && (debugMode === 'moderation' || debugMode === 'creative') && debugResult.user_prompt">
                                     <div style="margin-top:.5rem">
                                         <div style="font-size:.85rem;color:var(--text2)" x-text="$store.i18n.t('diag_debug_user')"></div>
                                         <div class="msg-popup-text" x-text="debugResult.user_prompt"></div>
                                     </div>
                                 </template>
-                                <template x-if="debugResult && debugMode === 'moderation' && debugResult.response">
+                                <template x-if="debugResult && debugMode === 'creative' && debugResult.details">
+                                    <div style="margin-top:.75rem">
+                                        <div style="font-size:.85rem;color:var(--text2)" x-text="$store.i18n.t('diag_debug_details')"></div>
+                                        <div class="msg-popup-text diag-debug-meta">
+                                            <div><strong x-text="$store.i18n.t('diag_debug_api') + ': '"></strong><span x-text="debugResult.details.api"></span></div>
+                                            <div><strong x-text="$store.i18n.t('diag_debug_search_configured') + ': '"></strong><span x-text="debugYesNo(debugResult.details.web_search_configured)"></span></div>
+                                            <div><strong x-text="$store.i18n.t('diag_debug_search_attempted') + ': '"></strong><span x-text="debugYesNo(debugResult.details.web_search_attempted)"></span></div>
+                                            <div><strong x-text="$store.i18n.t('diag_debug_search_used') + ': '"></strong><span x-text="debugYesNo(debugResult.details.web_search_used)"></span></div>
+                                            <div><strong x-text="$store.i18n.t('diag_debug_message_tools_configured') + ': '"></strong><span x-text="debugYesNo(debugResult.details.message_tools_configured)"></span></div>
+                                            <div><strong x-text="$store.i18n.t('diag_debug_message_tools_attempted') + ': '"></strong><span x-text="debugYesNo(debugResult.details.message_tools_attempted)"></span></div>
+                                            <div><strong x-text="$store.i18n.t('diag_debug_fallback_used') + ': '"></strong><span x-text="debugYesNo(debugResult.details.fallback_used)"></span></div>
+                                            <template x-if="debugResult.details.usage">
+                                                <div>
+                                                    <strong x-text="$store.i18n.t('diag_debug_usage') + ': '"></strong>
+                                                    <span x-text="debugResult.details.usage.input_tokens + ' / ' + debugResult.details.usage.output_tokens + ' / ' + debugResult.details.usage.total_tokens"></span>
+                                                    <small x-text="' (' + $store.i18n.t('diag_debug_usage_order') + ')'" style="color:var(--text2)"></small>
+                                                </div>
+                                            </template>
+                                            <template x-if="debugResult.details.web_search_error">
+                                                <div style="color:var(--red)"><strong x-text="$store.i18n.t('diag_debug_search_error') + ': '"></strong><span x-text="debugResult.details.web_search_error"></span></div>
+                                            </template>
+                                            <template x-if="debugResult.details.message_tools_error">
+                                                <div style="color:var(--red)"><strong x-text="$store.i18n.t('diag_debug_message_tools_error') + ': '"></strong><span x-text="debugResult.details.message_tools_error"></span></div>
+                                            </template>
+                                        </div>
+                                        <template x-if="debugResult.details.message_tool_calls && debugResult.details.message_tool_calls.length">
+                                            <div class="diag-debug-section">
+                                                <div class="diag-debug-section-title" x-text="$store.i18n.t('diag_debug_message_tool_calls')"></div>
+                                                <template x-for="(call, callIndex) in debugResult.details.message_tool_calls" :key="callIndex">
+                                                    <details class="msg-popup-text diag-debug-item">
+                                                        <summary x-text="'#' + (callIndex + 1) + ' ' + call.name"></summary>
+                                                        <div style="margin-top:.5rem"><strong x-text="$store.i18n.t('diag_debug_arguments') + ':'"></strong></div>
+                                                        <pre x-text="formatDebugJSON(call.arguments)"></pre>
+                                                        <div><strong x-text="$store.i18n.t('diag_debug_tool_output') + ':'"></strong></div>
+                                                        <pre x-text="formatDebugJSON(call.output)"></pre>
+                                                    </details>
+                                                </template>
+                                            </div>
+                                        </template>
+                                        <template x-if="debugResult.details.tool_calls && debugResult.details.tool_calls.length">
+                                            <div class="diag-debug-section">
+                                                <div class="diag-debug-section-title" x-text="$store.i18n.t('diag_debug_tool_calls')"></div>
+                                                <template x-for="(call, callIndex) in debugResult.details.tool_calls" :key="call.id || callIndex">
+                                                    <div class="msg-popup-text diag-debug-item">
+                                                        <strong x-text="'#' + (callIndex + 1) + ' ' + (call.action_type || 'web_search')"></strong>
+                                                        <span x-show="call.status" x-text="' · ' + call.status"></span>
+                                                        <template x-if="call.queries && call.queries.length">
+                                                            <div x-text="call.queries.join('\n')"></div>
+                                                        </template>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </template>
+                                        <template x-if="debugResult.details.citations && debugResult.details.citations.length">
+                                            <div class="diag-debug-section">
+                                                <div class="diag-debug-section-title" x-text="$store.i18n.t('diag_debug_citations')"></div>
+                                                <div class="msg-popup-text diag-debug-links">
+                                                    <template x-for="(citation, citationIndex) in debugResult.details.citations" :key="citation.url || citationIndex">
+                                                        <a :href="safeCitationURL(citation.url)" target="_blank" rel="noopener noreferrer"
+                                                            x-text="citation.title ? citation.title + ' — ' + citation.url : citation.url"></a>
+                                                    </template>
+                                                </div>
+                                            </div>
+                                        </template>
+                                        <template x-if="debugResult.details.reasoning_summaries && debugResult.details.reasoning_summaries.length">
+                                            <div class="diag-debug-section">
+                                                <div class="diag-debug-section-title" x-text="$store.i18n.t('diag_debug_reasoning_summary')"></div>
+                                                <template x-for="(summary, summaryIndex) in debugResult.details.reasoning_summaries" :key="summaryIndex">
+                                                    <div class="msg-popup-text" x-text="summary"></div>
+                                                </template>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                                <template x-if="debugResult && (debugMode === 'moderation' || debugMode === 'creative') && debugResult.response">
                                     <div style="margin-top:.5rem">
                                         <div style="font-size:.85rem;color:var(--text2)" x-text="$store.i18n.t('diag_debug_response')"></div>
                                         <div class="msg-popup-text" x-text="debugResult.response"></div>
                                     </div>
                                 </template>
-                                <template x-if="debugResult && debugMode !== 'moderation' && debugResult.raw">
+                                <template x-if="debugResult && debugMode !== 'moderation' && debugMode !== 'creative' && debugResult.raw">
                                     <div style="margin-top:.5rem">
                                         <div style="font-size:.85rem;color:var(--text2)" x-text="$store.i18n.t('diag_debug_response')"></div>
                                         <div class="msg-popup-text" x-text="debugResult.raw"></div>
@@ -1387,9 +1504,15 @@
                                             <div class="field">
                                                 <label><input type="checkbox" x-model="m.omit_max_tokens"> <span x-text="$store.i18n.t('mdl_omit_max_tokens')"></span></label>
                                             </div>
+                                            <div class="field">
+                                                <label><input type="checkbox" x-model="m.use_for_image_analysis"> <span x-text="$store.i18n.t('mdl_image_analysis')"></span></label>
+                                            </div>
+                                            <div class="field">
+                                                <label><input type="checkbox" x-model="m.use_for_web_search"> <span x-text="$store.i18n.t('mdl_web_search')"></span></label>
+                                            </div>
                                         </div>
                                     </template>
-                                    <button class="add-btn" @click="models.push({ provider:'', enabled:true, endpoint:'', api_key:'', deployment_name:'', temperature:null, omit_max_tokens:false, _show:false })"
+                                    <button class="add-btn" @click="models.push({ provider:'', enabled:true, endpoint:'', api_key:'', deployment_name:'', temperature:null, omit_max_tokens:false, use_for_image_analysis:false, use_for_web_search:false, _show:false })"
                                             x-text="'+ ' + $store.i18n.t('mdl_add')"></button>
                                     <button class="save-btn" :disabled="saving" @click="save()" x-text="saving ? $store.i18n.t('cfg_saving') : $store.i18n.t('cfg_save')"></button>
                                     <span class="upload-spinner" x-show="saving" x-cloak style="margin-left:.4rem;vertical-align:middle"></span>

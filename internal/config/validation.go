@@ -116,6 +116,18 @@ func (c *Config) validateNightMode() error {
 			errs = append(errs, fmt.Errorf("night_mode.days: %q is not a valid weekday (use e.g. monday/mon)", d))
 		}
 	}
+	if c.NightMode.ReputationExemption.Enabled != nil && *c.NightMode.ReputationExemption.Enabled {
+		source := strings.ToLower(strings.TrimSpace(c.NightMode.ReputationExemption.Source))
+		if source != "score" && source != "ai" && source != "both" {
+			errs = append(errs, fmt.Errorf("night_mode.reputation_exemption.source %q is not supported (use score, ai or both)", c.NightMode.ReputationExemption.Source))
+		}
+		grade := strings.ToLower(strings.TrimSpace(c.NightMode.ReputationExemption.MinimumGrade))
+		switch grade {
+		case "very_bad", "bad", "neutral", "good", "very_good":
+		default:
+			errs = append(errs, fmt.Errorf("night_mode.reputation_exemption.minimum_grade %q is not supported (use very_bad, bad, neutral, good or very_good)", c.NightMode.ReputationExemption.MinimumGrade))
+		}
+	}
 	return errors.Join(errs...)
 }
 

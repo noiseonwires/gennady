@@ -102,6 +102,70 @@ func TestScope_VisionSkippedWhenTopicExcluded(t *testing.T) {
 	assert.Equal(t, 0, rt.count(), "vision/OCR must be skipped when the (chat, topic) is excluded from moderation")
 }
 
+func TestScope_AIOnlyImageAnalysisEnhancesPhoto(t *testing.T) {
+	b, tg, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(testPNG())
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Visible text: HELLO"}}]}`))
+	})
+	b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+	b.config.AI.Enabled = true
+	b.config.AI.ContentModeration.AIImageAnalysisEnabled = true
+	model := fullModelConfig()
+	model.UseForImageAnalysis = true
+	b.config.AI.LightModel = config.AIModelConfigs{Configs: []config.AIModelConfig{model}}
+	tg.GetFileFunc = func(fileID string) (tgbotapi.File, error) {
+		return tgbotapi.File{FileID: fileID, DownloadURL: "https://files.telegram.example/photo.png"}, nil
+	}
+
+	msg := testMessage(-100, 7, 55, "")
+	msg.Photo = []tgbotapi.PhotoSize{{FileID: "photo-1"}}
+	mc := b.newInboundContext(msg, false)
+	b.stageEnhance(mc)
+
+	assert.Contains(t, mc.Enhanced, "HELLO")
+	assert.Equal(t, 2, rt.count(), "the photo must be downloaded and sent to the opted-in AI model")
+}
+
+func TestScope_VisionOutsideModeration_AnalyzesForwardedAlbumPhoto(t *testing.T) {
+	b, tg, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte("image-data"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"captionResult":{"text":"recognized scene","confidence":0.9}}`))
+	})
+	b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+	b.config.Moderation.ExcludedTopics = config.ChatTopicList{
+		Refs: []config.ChatTopicRef{{Chat: -100, Topic: config.TopicAny}},
+	}
+	b.config.AI.Enabled = true
+	b.config.AI.ContentModeration.VisionEnabled = true
+	b.config.AI.ContentModeration.VisionOutsideModeration = true
+	b.config.AI.ContentModeration.VisionEndpoint = "https://vision.example.com"
+	b.config.AI.ContentModeration.VisionAPIKey = "key"
+	b.config.Admin.WhitelistUserIDs = []int64{7}
+	tg.GetFileFunc = func(fileID string) (tgbotapi.File, error) {
+		return tgbotapi.File{FileID: fileID, DownloadURL: "https://files.telegram.example/photo.jpg"}, nil
+	}
+
+	msg := testMessage(-100, 7, 55, "")
+	msg.Photo = []tgbotapi.PhotoSize{{FileID: "photo-1"}}
+	msg.MediaGroupID = "album-1"
+	msg.ForwardFromChat = &tgbotapi.Chat{Title: "News", Username: "news"}
+	b.handleMessage(msg, false)
+
+	stored, err := b.db.GetMessageInfo(55, -100)
+	require.NoError(t, err)
+	assert.Contains(t, stored.Text, "<forwarded from: News (@news)> <photo>")
+	assert.Contains(t, stored.Text, "recognized scene")
+	assert.Equal(t, "album-1", stored.MediaGroupID)
+	assert.Equal(t, 2, rt.count(), "the photo must be downloaded and sent to Vision")
+}
+
 // A whitelisted user's message skips both vision and AI moderation, yet is still
 // recorded for chat history / reply context.
 func TestScope_WhitelistedUser_SkipsVisionAndModeration_StillRecorded(t *testing.T) {

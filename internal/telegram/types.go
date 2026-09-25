@@ -115,6 +115,8 @@ type Message struct {
 	Quote *TextQuote
 	// Entities are the inbound text entities (mentions, commands, blockquotes…).
 	Entities []MessageEntity
+	// CaptionEntities are the inbound entities attached to a media caption.
+	CaptionEntities []MessageEntity
 	// ReplyMarkup is the inbound inline keyboard attached to the message, or nil.
 	ReplyMarkup *InlineKeyboard
 
@@ -132,6 +134,12 @@ type Message struct {
 	Dice      *Dice
 	Location  *Location
 	Contact   *Contact
+
+	// MediaGroupID identifies the album (media group) this message belongs to.
+	// Telegram delivers an album as one separate message per item, all sharing
+	// this id, and only one of them carries the caption. Empty for standalone
+	// messages.
+	MediaGroupID string
 
 	// Forward origin, neutralized from the library's MessageOrigin union.
 	ForwardFrom       *User

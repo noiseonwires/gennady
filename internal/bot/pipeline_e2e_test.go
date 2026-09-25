@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gennadium/internal/config"
+	"gennadium/internal/telegram"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,6 +70,69 @@ func TestPipeline_CleanMessage_RecordedNotActioned(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.Empty(t, tg.DeletedIDs)
 	assert.Empty(t, tg.Restrictions)
+}
+
+func TestPipeline_DelayedMessage_UsesTelegramTimestamp(t *testing.T) {
+	b, _, _ := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"нет"}}]}`))
+	})
+	moderationConfig(b)
+	b.moderatedMsgs = make(map[string]time.Time)
+
+	sentAt := time.Date(2026, time.September, 22, 21, 45, 0, 0, time.UTC)
+	msg := testMessage(-100, 7, 55, "delivered after a webhook outage")
+	msg.Date = int(sentAt.Unix())
+
+	b.handleMessage(msg, false)
+
+	stored, err := b.db.GetMessageInfo(55, -100)
+	require.NoError(t, err)
+	assert.Equal(t, sentAt, stored.Timestamp)
+}
+
+func TestPipeline_TextLinkURL_IsStoredAndAvailableToLinkSummary(t *testing.T) {
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+	b.config.AI.Enabled = true
+	b.config.AI.LinkSummaries.Enabled = true
+	b.config.AI.LinkSummaries.ExcludedUserIDs = nil
+	b.config.AI.LinkSummaries.ExcludedTopics = config.ChatTopicList{}
+
+	msg := testMessage(-100, 7, 55, "Article title")
+	msg.Entities = []telegram.MessageEntity{{
+		Type: "text_link", Offset: 0, Length: len(msg.Text), URL: publicTarget,
+	}}
+	mc := b.newInboundContext(msg, false)
+
+	b.stageEnhance(mc)
+	require.Contains(t, mc.Enhanced, publicTarget)
+	require.True(t, mc.Scope.LinkSummary)
+	b.stageModerate(mc)
+	b.runLinkSummary(mc)
+
+	stored, err := b.db.GetMessageInfo(55, -100)
+	require.NoError(t, err)
+	assert.Contains(t, stored.Text, publicTarget)
+	assert.Greater(t, rt.count(), 0, "the hidden hyperlink target must reach link extraction")
+}
+
+func TestStoreBotMessageInfo_UsesTelegramTimestamp(t *testing.T) {
+	b, _ := newMockBot(t)
+	sentAt := time.Date(2026, time.September, 22, 21, 46, 0, 0, time.UTC)
+
+	b.storeBotMessageInfo(&telegram.Message{
+		MessageID: 56,
+		Chat:      telegram.Chat{ID: -100},
+		From:      &telegram.User{ID: b.botSelf.ID},
+		Text:      "bot reply",
+		Date:      int(sentAt.Unix()),
+	})
+
+	stored, err := b.db.GetMessageInfo(56, -100)
+	require.NoError(t, err)
+	assert.Equal(t, sentAt, stored.Timestamp)
 }
 
 // When an image trips the Content-Safety check, the moderate stage routes it

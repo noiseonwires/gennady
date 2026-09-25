@@ -46,7 +46,7 @@ func scanAction(s rowScanner) (*Action, error) {
 
 // messageInfoColumns is the canonical SELECT list for MessageInfo. Keep callers
 // using this constant so the column order stays in lock-step with the scanner.
-const messageInfoColumns = `message_id, chat_id, user_id, username, text, reply_to_message_id, timestamp, extra_info, message_thread_id, quote_text, reactions, moderation_reason`
+const messageInfoColumns = `message_id, chat_id, user_id, username, text, reply_to_message_id, timestamp, extra_info, message_thread_id, quote_text, reactions, moderation_reason, media_group_id`
 
 // scanMessageInfo populates a MessageInfo from a row that selects
 // messageInfoColumns in order.
@@ -55,7 +55,7 @@ func scanMessageInfo(s rowScanner, m *MessageInfo) error {
 	if err := s.Scan(
 		&m.MessageID, &m.ChatID, &m.UserID, &m.Username,
 		&m.Text, &m.ReplyToMessageID, &tsStr, &m.ExtraInfo, &m.MessageThreadID,
-		&m.QuoteText, &m.Reactions, &m.ModerationReason,
+		&m.QuoteText, &m.Reactions, &m.ModerationReason, &m.MediaGroupID,
 	); err != nil {
 		return err
 	}
