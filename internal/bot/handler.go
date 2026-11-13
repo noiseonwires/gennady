@@ -240,16 +240,18 @@ func (b *Bot) handleCommand(message *tgbotapi.Message) {
 	switch message.Command() {
 	case "help":
 		b.tg.SendMessage(telegram.SendMessageParams{
-			ChatID:           message.Chat.ID,
-			Text:             "This is gennady. Commands will be implemented.",
-			ReplyToMessageID: message.MessageID,
+			ChatID:             message.Chat.ID,
+			Text:               "This is gennady. Commands will be implemented.",
+			ReplyToMessageID:   message.MessageID,
+			RequireReplyTarget: true,
+			MessageThreadID:    messageTopic(message),
 		})
 	}
 }
 
 // handleCreativeFollowUp handles follow-up replies when user responds to bot's creative reply.
 func (b *Bot) handleCreativeFollowUp(message *tgbotapi.Message) {
-	log.Printf("User %d triggered creative reply (reply or mention), checking limits", message.From.ID)
+	log.Printf("User %d triggered creative reply (reply or mention)", message.From.ID)
 
 	if b.config.AI.CreativeReplies.FollowUpOnlySameUser && message.ReplyToMessage != nil {
 		botMsgID := message.ReplyToMessage.MessageID
@@ -259,24 +261,31 @@ func (b *Bot) handleCreativeFollowUp(message *tgbotapi.Message) {
 		}
 	}
 
-	maxMessages := b.config.AI.CreativeReplies.MaxMessages
-	timeWindow := b.config.AI.CreativeReplies.TimeWindow
-	recentBotMessageCount, err := b.db.GetRecentBotMessageCount(b.botSelf.ID, message.Chat.ID, timeWindow)
-	if err != nil {
-		log.Printf("Error checking recent bot message count: %v", err)
-		return
+	// Admin replies bypass the limit and are excluded from the shared count.
+	rateLimitExempt := b.config.AI.CreativeReplies.SkipRateLimitForAdmins && b.isUserAdmin(message.From.ID)
+	if rateLimitExempt {
+		log.Printf("Bypassing creative reply rate limit for admin %d", message.From.ID)
+	} else {
+		maxMessages := b.config.AI.CreativeReplies.MaxMessages
+		timeWindow := b.config.AI.CreativeReplies.TimeWindow
+		recentBotMessageCount, err := b.db.GetRecentBotMessageCount(b.botSelf.ID, message.Chat.ID, timeWindow)
+		if err != nil {
+			log.Printf("Error checking recent bot message count: %v", err)
+			return
+		}
+
+		if recentBotMessageCount >= maxMessages {
+			log.Printf("Skipping follow-up reply: bot has already sent %d messages in the last %d hours (limit: %d)", recentBotMessageCount, timeWindow, maxMessages)
+			b.setMessageReaction(message.Chat.ID, message.MessageID, b.config.Reactions.CreativeReplyLimit)
+			log.Printf("Added yawn emoji to message %d (creative reply limit reached)", message.MessageID)
+			return
+		}
+
+		log.Printf("Generating follow-up response (bot messages in last %d hours: %d/%d)", timeWindow, recentBotMessageCount, maxMessages)
 	}
 
-	if recentBotMessageCount >= maxMessages {
-		log.Printf("Skipping follow-up reply: bot has already sent %d messages in the last %d hours (limit: %d)", recentBotMessageCount, timeWindow, maxMessages)
-		b.setMessageReaction(message.Chat.ID, message.MessageID, b.config.Reactions.CreativeReplyLimit)
-		log.Printf("Added yawn emoji to message %d (creative reply limit reached)", message.MessageID)
-		return
-	}
-
-	log.Printf("Generating follow-up response (bot messages in last %d hours: %d/%d)", timeWindow, recentBotMessageCount, maxMessages)
-
-	if strings.TrimSpace(message.Text) == "" {
+	messageText := message.TextWithEntityLinks()
+	if strings.TrimSpace(messageText) == "" {
 		log.Printf("Skipping creative follow-up - message text is empty")
 		return
 	}
@@ -292,7 +301,7 @@ func (b *Bot) handleCreativeFollowUp(message *tgbotapi.Message) {
 	}
 
 	var reaction string
-	reply, err := b.generateCreativeReplyWithQuote(message.Text, quotedText, message.MessageID, int64(message.From.ID), message.Chat.ID, replyToText)
+	reply, err := b.generateCreativeReplyWithQuote(messageText, quotedText, message.MessageID, int64(message.From.ID), message.Chat.ID, replyToText)
 	if err != nil {
 		if strings.Contains(err.Error(), "content_filter") {
 			log.Printf("⚠️ Content filter triggered during follow-up reply generation - treating as inappropriate content")
@@ -309,9 +318,14 @@ func (b *Bot) handleCreativeFollowUp(message *tgbotapi.Message) {
 	reply = strings.Trim(reply, `"`)
 	reply = strings.ReplaceAll(reply, "-", "-")
 
-	sentMsg := b.sendToModerationChatWithReply(message.Chat.ID, reply, message.MessageID)
+	sentMsg := b.sendToModerationChatWithReply(message, reply)
 	if sentMsg != nil {
 		b.storeBotMessageInfo(sentMsg)
+		if rateLimitExempt {
+			if err := b.db.MarkMessageRateLimitExempt(sentMsg.MessageID, sentMsg.Chat.ID); err != nil {
+				log.Printf("Error marking admin creative reply %d as rate-limit exempt: %v", sentMsg.MessageID, err)
+			}
+		}
 	}
 
 	log.Printf("Sent creative follow-up reply and stored in database for future reply chains")
@@ -340,7 +354,7 @@ func (b *Bot) extractQuotedText(message *tgbotapi.Message) string {
 	return ""
 }
 
-// processMessageEnhancements processes images for immediate analysis.
+// processMessageEnhancements analyzes photos, animations and stickers.
 func (b *Bot) processMessageEnhancements(message *tgbotapi.Message) (string, bool) {
 	messageText := message.Text
 
@@ -352,27 +366,18 @@ func (b *Bot) processMessageEnhancements(message *tgbotapi.Message) (string, boo
 	visionEnabled := b.config.AI.ContentModeration.VisionEnabled
 	ocrSpaceEnabled := b.config.AI.ContentModeration.OCRSpaceEnabled
 	contentSafetyFlagged := false
-	if (aiImageEnabled || visionEnabled || ocrSpaceEnabled) && message.Photo != nil && len(message.Photo) > 0 {
-		photo := message.Photo[len(message.Photo)-1]
-
-		log.Printf("Processing image in message %d (file_id: %s)", message.MessageID, photo.FileID)
-
-		imageData, err := b.downloadImage(photo.FileID)
+	media, hasMedia := messageAnalysisMedia(message)
+	if (aiImageEnabled || visionEnabled || ocrSpaceEnabled) && hasMedia {
+		analysis, err := b.analyzeMessageMedia(media)
+		contentSafetyFlagged = analysis.ContentSafetyFlagged
 		if err != nil {
-			log.Printf("Error downloading image: %v", err)
-		} else {
-			imageAnalysis, flagged, analysisErr := b.describeImageWithFallback(imageData)
-			contentSafetyFlagged = flagged
-			if analysisErr != nil {
-				log.Printf("Error analyzing image: %v", analysisErr)
-			}
-
-			if analysisErr == nil && imageAnalysis != "" {
-				if messageText != "" {
-					messageText = i18n.Tf("image.with_text", messageText, imageAnalysis)
-				} else {
-					messageText = i18n.Tf("image.only", imageAnalysis)
-				}
+			log.Printf("Error analyzing %s in message %d: %v", media.kind, message.MessageID, err)
+		}
+		if analysis.Description != "" {
+			if messageText != "" {
+				messageText = i18n.Tf("image.with_text", messageText, analysis.Description)
+			} else {
+				messageText = i18n.Tf("image.only", analysis.Description)
 			}
 		}
 	}

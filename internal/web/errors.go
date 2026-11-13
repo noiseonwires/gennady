@@ -85,6 +85,8 @@ var (
 // Config save / load / validate
 var (
 	errNoFieldsToUpdate      = webError{code: "config.no_fields_to_update", msg: "no fields to update", status: http.StatusBadRequest}
+	errConfigSecretNotFound  = webError{code: "config.secret_not_found", msg: "unknown sensitive configuration field", status: http.StatusNotFound}
+	errConfigSecretHashed    = webError{code: "config.secret_hashed", msg: "this password is stored as a one-way hash and cannot be revealed; enter a new password to replace it", status: http.StatusConflict}
 	errConfigValidation      = webError{code: "config.validation_failed", msg: "validation failed", status: http.StatusBadRequest}
 	errConfigSaveFailed      = webError{code: "config.save_failed", msg: "failed to save config", status: http.StatusInternalServerError}
 	errConfigReadFileFailed  = webError{code: "config.read_file_failed", msg: "failed to read config file", status: http.StatusInternalServerError}

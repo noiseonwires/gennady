@@ -74,10 +74,11 @@ func TestRun_LocalDBCopiesFileAndOverwrites(t *testing.T) {
 
 	src := &fakeSource{local: true}
 	cfg := config.BackupConfig{
-		FilePrefix:    "chat1_",
-		IncludeConfig: true,
-		Target:        "local",
-		LocalPath:     dest,
+		FilePrefix:         "chat1_",
+		IncludeConfig:      true,
+		EncryptionPassword: "ignored until encryption is enabled",
+		Target:             "local",
+		LocalPath:          dest,
 	}
 
 	for _, body := range []string{"gen-1", "gen-2", "gen-3"} {
@@ -132,6 +133,35 @@ func TestRun_LocalDBWithoutConfigUsesExport(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, src.exportCalls)
 	assert.False(t, src.lastIncluded)
+}
+
+func TestRun_CurrentDirectoryScratch(t *testing.T) {
+	scratch := t.TempDir()
+	t.Chdir(scratch)
+	dest := t.TempDir()
+	body := "exported database"
+
+	for _, encrypt := range []bool{false, true} {
+		cfg := config.BackupConfig{
+			Target: "local", LocalPath: dest, TempDir: "./", IncludeConfig: true,
+			Encrypt: encrypt, EncryptionPassword: "test backup password",
+		}
+		src := &fakeSource{exportBody: body}
+		res, err := Run(context.Background(), src, cfg, "")
+		require.NoError(t, err)
+		assert.Equal(t, 1, src.exportCalls)
+
+		data, err := os.ReadFile(filepath.Join(dest, res.FileName))
+		require.NoError(t, err)
+		if encrypt {
+			assertEncryptedBackup(t, data, DefaultBaseName, cfg.EncryptionPassword, body)
+		} else {
+			assert.Equal(t, body, string(data))
+		}
+		entries, err := os.ReadDir(scratch)
+		require.NoError(t, err)
+		assert.Empty(t, entries, "temporary snapshots, archives and write probes must be removed")
+	}
 }
 
 func TestRun_UnknownTarget(t *testing.T) {

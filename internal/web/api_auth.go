@@ -16,6 +16,10 @@ func (h *apiHandler) handleGetVersion(w http.ResponseWriter, r *http.Request) {
 	if h.configFromDB {
 		configSource = "db"
 	}
+	role := sessionRole(extractSessionToken(r))
+	if h.moderatorPathPrefix != "" && r.URL.Path == h.moderatorPathPrefix+"/api/version" {
+		role = RoleModerator
+	}
 	jsonResponse(w, map[string]string{
 		"version":       h.version,
 		"git_commit":    h.gitCommit,
@@ -25,11 +29,8 @@ func (h *apiHandler) handleGetVersion(w http.ResponseWriter, r *http.Request) {
 		"bot_name":      h.botName,
 		"author":        h.botAuthor,
 		"license":       h.botLicense,
-		// role lets the SPA tailor itself to the caller's privileges. It is
-		// derived from the validated session token presented on this request,
-		// so it cannot be spoofed by the client. Reflects RoleSuper for the
-		// super-admin UI and RoleModerator for the isolated moderator UI.
-		"role": sessionRole(extractSessionToken(r)),
+		// The moderator mount remains limited even for a super-admin session.
+		"role": role,
 	})
 }
 

@@ -23,7 +23,7 @@ const (
 	ProviderRemote = "remote"
 
 	remoteStartupSlowOperationThreshold = 500 * time.Millisecond
-	currentSchemaVersion                = 1
+	currentSchemaVersion                = 3
 )
 
 // UserActivityWindowDays is the number of days of per-user daily message-count
@@ -120,9 +120,10 @@ type MessageInfo struct {
 	Timestamp time.Time `json:"timestamp"`
 	ExtraInfo string    `json:"extra_info"` // Extracted content from links (Telegram posts, external websites)
 	// ModerationReason holds the AI moderation verdict's explanation (the
-	// "decision details" lines the model emits after the trigger line) for the
-	// message. Populated whenever AI moderation fires on the message; empty
-	// otherwise. Surfaced in the Web UI (chat messages list and moderation
+	// "decision details" lines the model emits after the trigger line), or the
+	// matched labels when no explanation is given. Populated whenever AI
+	// moderation fires on the message; empty otherwise. Surfaced in the Web UI
+	// (chat messages list and moderation
 	// events list) so admins can see *why* a message was actioned.
 	ModerationReason string `json:"moderation_reason"`
 }
@@ -522,6 +523,7 @@ func (db *DB) upgradeSchema() error {
 			timestamp DATETIME NOT NULL,
 			extra_info TEXT,
 			moderation_reason TEXT NOT NULL DEFAULT '',
+			rate_limit_exempt INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (message_id, chat_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS scheduled_events (
@@ -631,6 +633,12 @@ func (db *DB) upgradeSchema() error {
 			content_hash TEXT NOT NULL,
 			changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS media_analysis_cache (
+			cache_key TEXT NOT NULL PRIMARY KEY,
+			description TEXT NOT NULL,
+			content_safety_flagged INTEGER NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 	}
 
@@ -763,6 +771,7 @@ func (db *DB) ensureSchemaColumns() error {
 		{"message_info", "media_group_id", "ADD COLUMN media_group_id TEXT NOT NULL DEFAULT ''"},
 		{"message_info", "reactions", "ADD COLUMN reactions TEXT NOT NULL DEFAULT ''"},
 		{"message_info", "moderation_reason", "ADD COLUMN moderation_reason TEXT NOT NULL DEFAULT ''"},
+		{"message_info", "rate_limit_exempt", "ADD COLUMN rate_limit_exempt INTEGER NOT NULL DEFAULT 0"},
 		{"user_profiles", "tg_profile_analysis", "ADD COLUMN tg_profile_analysis TEXT NOT NULL DEFAULT ''"},
 		{"user_profiles", "first_seen_at", "ADD COLUMN first_seen_at DATETIME NOT NULL DEFAULT ''"},
 		{"reputation_events", "severity", "ADD COLUMN severity INTEGER NOT NULL DEFAULT 0"},

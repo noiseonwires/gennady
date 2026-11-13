@@ -4,6 +4,7 @@ package bot
 
 import (
 	"errors"
+	"strings"
 
 	"gennadium/internal/config"
 )
@@ -24,6 +25,39 @@ type modelOutcome struct {
 	contentFilter bool   // provider content filter tripped (definitive-ish)
 	cfDetails     string // content-filter details, when contentFilter is set
 	transientErr  bool   // a non-content-filter error occurred
+}
+
+type moderationVerdicts struct {
+	Light                string
+	Full                 string
+	Decision             string
+	ContentFilterDetails string
+}
+
+func formatModelVerdict(outcome modelOutcome) string {
+	if outcome.contentFilter {
+		if outcome.cfDetails != "" {
+			return ContentSecurityTrigger + "\n" + outcome.cfDetails
+		}
+		return ContentSecurityTrigger
+	}
+	if outcome.transientErr {
+		return ""
+	}
+	triggers := make([]string, 0, len(outcome.rules))
+	for _, rule := range outcome.rules {
+		if trigger := strings.TrimSpace(rule.Trigger); trigger != "" {
+			triggers = append(triggers, trigger)
+		}
+	}
+	firstLine := strings.Join(triggers, ", ")
+	if firstLine == "" {
+		firstLine = "clean"
+	}
+	if outcome.details == "" {
+		return firstLine
+	}
+	return firstLine + "\n" + outcome.details
 }
 
 // newModelOutcome classifies an AI call's (rules, details, err) return into a

@@ -116,6 +116,13 @@ Gennady can manage **several chats at once** and, inside each chat, can target i
 shape. Read this section once - it applies to moderation, message deletion, creative replies,
 summaries and RSS publishing.
 
+### Comments under channel posts
+
+Channel comments are threads in the channel's **linked discussion group**, so Gennady can
+moderate them just like a regular group chat. Add the bot as an administrator of that group
+with the required moderation permissions, and put the **discussion group's ID**, not the
+channel's ID, in `moderation.chat_id`.
+
 ### What is a "topic"?
 
 A **topic** (also called a *forum topic* or *thread*) is a sub-channel inside a Telegram group
@@ -333,6 +340,8 @@ backup:
   interval_hours: 48          # run every N hours
   file_prefix: ""             # prepended to "moderation.db" → e.g. chat1_moderation.db
   include_config: true        # include the config_values table
+  encrypt: false              # opt-in compressed AES-256 ZIP
+  encryption_password: ""     # required when encrypt is true
   notify_super_admin_on_failure: false   # DM the super-admin if a scheduled run fails
   target: "local"             # "local", "webdav" or "bunny"
   local_path: "./backups"
@@ -351,6 +360,31 @@ already shows errors in the browser.
 
 **Prefix** lets several bot instances back up into the same folder/zone without
 overwriting each other. Only `A-Z a-z 0-9 . _ -` are kept; anything else becomes `_`.
+
+### Encrypted archives (opt-in)
+
+Set `backup.encrypt: true` and supply `backup.encryption_password` (or
+`BACKUP_ENCRYPT=true` and `BACKUP_ENCRYPTION_PASSWORD`). This works for local,
+WebDAV and Bunny destinations, both on schedule and with **Back up now**.
+The bot compresses and encrypts the snapshot in Go; no external executable is
+required. Encryption is off by default, so existing backups remain unchanged.
+A missing or whitespace-only password is an error, never a plaintext fallback.
+
+The destination file becomes `<prefix>moderation.db.zip`, containing one
+`<prefix>moderation.db` encrypted with WinZip AES-256, not legacy ZipCrypto.
+Open it with an AES-capable tool such as 7-Zip and enter the password. To restore,
+extract the database first, then use the existing database import/upload flow;
+uploading the encrypted ZIP directly is not supported.
+
+Use a strong, unique passphrase and keep it separately from the backup: losing it
+means losing access to the archive. Surrounding spaces in the password are
+significant. ZIP encryption hides file contents, **not file names or sizes**.
+The password is masked in the configuration UI/API but must remain recoverable
+in the bot's configuration; protect that configuration too.
+
+Changing encryption mode changes the destination file name. Existing plaintext
+backups are **not** encrypted or deleted automatically; remove them yourself if
+needed after checking the new encrypted backup.
 
 **WebDAV** (Nextcloud, ownCloud, Synology, Apache mod_dav, …):
 
@@ -396,9 +430,12 @@ zone's primary region:
 
 ### Temporary files
 
-Every backup first writes one intermediate snapshot to a scratch folder, uploads
-it, and then **always deletes it** - including when the upload fails. A WebDAV or
-Bunny backup therefore leaves nothing behind on the bot's own disk.
+Every backup first writes one intermediate plaintext snapshot to a scratch folder
+and, when encryption is enabled, creates an encrypted ZIP alongside it. Only the
+ZIP is uploaded in encrypted mode. Both temporary files are deleted after the run,
+including on encryption or upload failure. A WebDAV or Bunny backup therefore
+leaves nothing behind on the bot's own disk after normal completion or error
+handling. A process crash can leave temporary files; protect the scratch folder.
 
 The scratch folder is `backup.temp_dir`. When it is empty the bot uses the folder
 of `database.path`, and if that folder cannot be written it falls back to the
@@ -407,9 +444,14 @@ system temp dir with a warning in the log.
 > **Containers:** set `temp_dir` explicitly. With a remote database, `database.path`
 > often still holds a default such as `/db/moderation.db` that is never actually
 > used - and an unprivileged container process cannot create `/db`, which used to
-> fail the backup with `mkdir /db: permission denied`. A relative `"./"` or
-> `"/tmp"` works. Make sure the chosen folder has room for a full copy of the
-> database.
+> fail the backup with `mkdir /db: permission denied`. Use `"/tmp"` (or
+> `BACKUP_TEMP_DIR=/tmp`) to avoid depending on the working directory's permissions.
+> The official image runs as UID/GID `65532:65532` and makes `/app` writable, so
+> `"./"` also works unless a bind mount or a read-only filesystem overrides it.
+> Mounted scratch folders must be writable by that user. An explicitly configured
+> but unwritable `temp_dir` fails the backup; it does not silently fall back.
+> Make sure the chosen folder has room for a full copy of the database plus the
+> encrypted archive when encryption is enabled.
 
 > The System tab of the web UI has a **Back up now** button that runs the same job
 > immediately, which is the quickest way to verify credentials and paths.
@@ -446,12 +488,35 @@ web_ui:
   password: ""                   # admin password or hashed:pbkdf2-sha256:... (empty = disabled)
   otp_enabled: true              # require Telegram OTP as 2FA (needs super_admin_user_id)
   moderator_path_prefix: "/mod"  # URL prefix for the isolated, limited moderator UI (must differ from path_prefix)
-  public_url: ""                 # base URL without prefix (https://bot.example.com); falls back to the webhook host when empty
+  public_url: ""                 # scheme + host only (e.g. https://bot.example.com); empty = webhook scheme+host
 ```
+
+`public_url` is only the scheme and host. Both prefixes are full URL paths and are
+used as-is. For a reverse proxy that only forwards `/admin2/`, nest the moderator UI
+under the admin path:
+
+```yaml
+web_ui:
+  enabled: true
+  public_url: "https://bot.example.com"
+  path_prefix: "/admin2"
+  moderator_path_prefix: "/admin2/modentry"
+```
+
+Keep your existing authentication settings. The admin UI is then at
+`https://bot.example.com/admin2/`, and moderator login links use
+`https://bot.example.com/admin2/modentry/`. Configure the proxy to **preserve the
+path**, not strip it. Restart after URL/path changes. `public_url` must be an
+absolute HTTP(S) URL without a path, credentials, query or fragment. With an empty
+`public_url`, the webhook's scheme and host are used.
 
 When config is stored in the database, `web_ui.password` is saved in the marked
 `hashed:pbkdf2-sha256:...` format. YAML configs may use either plaintext or that marked hash,
 so exporting DB-backed config to YAML does not lose the password.
+
+Secret fields are masked on load. The eye button fetches only the selected secret
+for the authenticated super-admin; saving without revealing or editing it preserves
+its value. A hashed `web_ui.password` cannot be revealed; enter a new password to replace it.
 
 > **Change the path prefix.** Don't leave `path_prefix` at the default `/admin` on a
 > publicly reachable instance - set a custom, hard-to-guess value (e.g. `/manage-7f3a`) so the
@@ -471,13 +536,15 @@ super-admin credentials:
 - It is served under its own `moderator_path_prefix` (default `/mod`, must differ from
   `path_prefix`). Only moderation, messages, profiles and a **read-only** diagnostics page are
   mounted — configuration, logs, the system page and all test/debug actions don't exist under
-  this prefix (they return 404), so they can't be reached even by URL.
+  this prefix (they return 404), so they can't be reached even by URL. This UI stays
+  restricted even when opened with a valid super-admin session (e.g. when nested under
+  `path_prefix`).
 - Access is granted on demand: a moderator opens the bot, taps **🛡️ Access Web UI** on the
   `/start` menu, and the bot sends a **one-time login link plus a separate OTP**. Opening the
   link and entering the matching OTP grants a moderator-scoped session. The link is single-use,
   expires after 5 minutes, and is useless without the OTP.
-- `public_url` is the externally-reachable base URL used to build that link
-  (e.g. `https://bot.example.com`), **without** the path prefix. If it's empty, it falls back to
+- `public_url` is the externally-reachable scheme + host used to build that link
+  (e.g. `https://bot.example.com`), **without** any path. If it's empty, it falls back to
   the scheme + host of `webhook.url` (handy for webhook deployments). If neither is set, the
   "Access Web UI" button is hidden from the keyboard and moderator login is unavailable.
 
@@ -560,6 +627,19 @@ Set `use_for_web_search: true` only on deployments and gateways that support the
 
 Most AI features have a `use_full_model` toggle to pick which model they use.
 
+**Cost-conscious starting point:** modern light models work well for many tasks, so an admin
+can start with the light model for all features that offer model selection: creative replies,
+daily summaries, message and link summaries, morning greetings, warnings, RSS processing, and more.
+Set those features' `use_full_model: false` to reduce token costs, then upgrade individual
+features only if their results need it. Keep a stronger `full_model` for moderation-verdict
+double-checks: it confirms potential violations flagged by the light model, and can optionally
+check a new user's first messages via `ai.content_moderation.full_model_first_messages`.
+
+**Warning text:** set `ai.content_moderation.warning_use_full_model: false` to generate both
+automatic and manual warnings with the light model. The default is `true` (full model) to
+preserve existing behavior. This switch only selects the model that writes the warning; it
+does not change moderation-verdict double-checks.
+
 ---
 
 ## AI content moderation
@@ -573,6 +653,7 @@ ai:
     enabled: true
     skip_admin_users: true
     complaint_manual_moderation: true   # reply + @bot complaint handling (see below)
+    warning_use_full_model: false # light model for warning text; default true (full model)
     default_mute_minutes: 60     # duration for the "mute" action (0 = forever)
     admin_notification_delay_seconds: 3 # wait, then verify the message still exists before notifying admins
     reply_context_max_chars: 500 # cap on quoted {{reply_to}} text (0 = no limit)
@@ -619,8 +700,20 @@ ai:
       system: |
         You are a chat moderator. Write a short, personalized warning (1-2 sentences) for the
         user, explaining the problem. Include a ⚠️ emoji. Chat rules: {{chat_rules}}
-      user: "Write a warning for {{username}}.{{user_message}}"
+      user: |
+        Write a warning for {{username}}.{{user_message}}
+        Moderation decision: {{moderation_verdict}}
+        Light-model verdict: {{light_verdict}}
+        Full-model verdict: {{full_verdict}}
 ```
+
+Warning prompts accept `{{moderation_verdict}}` (the moderation decision/reason, if
+available), plus `{{light_verdict}}` and `{{full_verdict}}` for automatic moderation.
+Manual warnings from Telegram or the Web UI use the stored moderation reason.
+`{{message}}` contains the message itself; `{{user_message}}` wraps the same content
+in a sentence. If moderation blocked the original text through Content Security,
+both placeholders contain safety-analysis flags instead. A safety-filtered warning
+generation is retried once with those flags, without the original message.
 
 **Actions:**
 
@@ -672,9 +765,69 @@ happens next:
 Catch violations hidden in images by extracting their text/content and running it through the
 same moderation pipeline.
 
+The same settings also cover Telegram animations and stickers:
+
+- GIF/MP4 animations and WebM video stickers become a single PNG containing the **first,
+  middle and last decoded frame**, left to right. One- or two-frame animations use their
+  distinct frames only. GIF documents (`image/gif`) are supported too. Sampling is not a
+  full-video safety scan.
+- Static WebP stickers are rendered to PNG on a white background.
+- Animated TGS stickers use their Telegram thumbnail, not the full animation. A missing
+  thumbnail is logged and skipped.
+
+Non-photo conversion is **opt-in**: set `ai.content_moderation.ffmpeg_enabled: true`
+(default: `false`), alongside an enabled image-analysis provider. The FFmpeg executable
+path defaults to `/usr/bin/ffmpeg`, matching the Docker image; an omitted, empty or
+whitespace-only `ai.content_moderation.ffmpeg_path` uses that default. Override the path
+for your host (for example `'C:\Media Tools\ffmpeg.exe'`), or use `ffmpeg` for lookup on
+PATH. `ffprobe` (`ffprobe.exe` on Windows) must be
+installed alongside the resolved FFmpeg executable; it is not looked up separately on PATH.
+The Docker image includes both tools; enabling `ffmpeg_enabled` needs no path override.
+Environment-variable equivalents are `AI_CONTENT_MODERATION_FFMPEG_ENABLED` and
+`AI_CONTENT_MODERATION_FFMPEG_PATH`.
+
+**FFmpeg and ffprobe are separate executables**, usually bundled in the same distribution:
+
+- `ffprobe` reads media metadata and counts decoded frames.
+- `ffmpeg` extracts the selected frames and converts images to PNG.
+
+Configure only the FFmpeg path; the bot automatically locates the separate ffprobe
+executable in the same directory. There is no separate `ffprobe_path` setting. For example:
+
+```text
+C:\ffmpeg\bin\ffmpeg.exe  <- set ffmpeg_path to this
+C:\ffmpeg\bin\ffprobe.exe <- keep this beside ffmpeg.exe
+```
+
+Setting `ffmpeg_enabled: false` **disables animation and sticker image checks**,
+including TGS thumbnail analysis and cached verdicts, before any media download. Photo
+analysis and text/caption moderation remain unchanged. An invalid configured executable or
+missing sibling `ffprobe` is logged as a conversion error when the check is enabled.
+Changing only the path does not enable checks; use the boolean to opt in or out.
+
+Downloads are limited to 20 MiB; conversion has a 30-second timeout and accepts up to
+1800 frames and 4096x4096 source dimensions. Conversion/download failures are logged without
+discarding the message caption.
+
+Successful analysis descriptions and Content Safety flags are cached in the database with
+**no expiration**, keyed by SHA-256 of the original media bytes, media type and analysis
+settings (including prompts, eligible models and language). Reposts still download the source
+to compute the hash, but cache hits skip conversion and image-analysis API calls. Concurrent
+reposts share one analysis. TGS entries are keyed by the original sticker, not its thumbnail.
+Failed/empty analyses and incomplete Content Safety checks are not cached. Captions, user
+context and final text-moderation decisions are **not** cached; moderation still runs per
+message. Cached flags remain ignored outside moderated scopes. To clear the cache manually:
+`DELETE FROM media_analysis_cache;`. Database backups and clones include cached results;
+imports merge entries without removing existing cache keys.
+
 ```yaml
 ai:
   content_moderation:
+    # Opt in with true; photos and text/caption moderation are unaffected.
+    ffmpeg_enabled: false
+    # Default Docker location; override for your host. Empty uses this default.
+    ffmpeg_path: "/usr/bin/ffmpeg"
+
     # Multimodal AI - description, OCR, meme/context and safety cues. Both this
     # switch and use_for_image_analysis on at least one model must be enabled.
     ai_image_analysis_enabled: true
@@ -699,7 +852,7 @@ ai:
     # Also analyze images in chats/topics listed in moderation.excluded_topics,
     # so their recorded history keeps the OCR text and description. Those
     # messages are still never moderated (Content Safety verdicts on images are
-    # ignored there). Costs one image API call per photo.
+    # ignored there). Image API calls are avoided on cache hits.
     vision_outside_moderation: false
 
     # Screen a new member's WHOLE public profile on their first message: name,
@@ -752,9 +905,11 @@ ai:
     web_search_enabled: true     # model decides whether current web information is needed
     message_tools_enabled: true  # let the model query stored history when useful
     message_tools_max_limit: 20  # per-call maximum; absolute ceiling is 50
+    reputation_tool_enabled: false # optional AI reputation and score lookup
     context_only_current_topic: true # keep stored-message context in the triggering topic/thread
     max_messages: 3              # max replies per time window
     time_window: 3              # window length in hours
+    skip_rate_limit_for_admins: false # allow admins to bypass the rate limit
     included_topics: []          # where replies are allowed (empty = every chat, any topic)
     excluded_topics: []          # topics where replies are suppressed
     follow_up_only_same_user: false
@@ -770,9 +925,21 @@ replies only in one topic, set `included_topics: [{chat: -100111, topic: 42}]`.
 Set `context_only_current_topic: true` to keep reply chains, recent/user history, adjacent
 messages, and message-history tools inside the topic that triggered the reply.
 
+Set `skip_rate_limit_for_admins: true` to let the configured super-admin and admins in
+any configured moderation or admin chat receive creative replies even when the chat-wide
+`max_messages` / `time_window` limit has been reached. Replies to admins are not counted
+toward that shared limit, so they never use up other users' quota. Topic restrictions, moderation, and
+`follow_up_only_same_user` still apply. The setting is off by default.
+
 The prompt also accepts `{{quote}}` (the fragment the user quoted, if any) and the
 `{{user_profile}}` / `{{user_reputation}}` blocks - see the
 [placeholder reference](cookbook.md#prompt-placeholders-reference).
+
+`{{message}}` includes the triggering message's text/caption and available image
+analysis. Enabled image analysis also runs for creative-reply mentions/replies in
+moderation-excluded topics and for whitelisted senders; this does not enable
+moderation for them. The existing analysis/cache is reused rather than running a
+second analysis for the reply.
 
 Web search requires both `web_search_enabled: true` and `use_for_web_search: true` on at least
 one model in the selected light/full pool. The bot uses the Responses API with automatic tool
@@ -796,6 +963,25 @@ hard-capped at 50; offsets are capped at 10,000 and each serialized result is ca
 Long message text is truncated with explicit metadata. If the selected provider/model does not
 support Responses function calling, the bot falls back to the existing web-search or ordinary
 Chat Completions path.
+
+Set `reputation_tool_enabled: true` to independently enable `get_user_reputation` for
+creative replies (default: off). The model can look up a user by exact numeric ID,
+Telegram username (with or without `@`), or known display name. Only users with stored
+messages in the current chat are eligible; duplicate names return an ambiguity error
+and require an ID. This is chat-wide, not topic-limited, and does not require message
+history tools or web search.
+
+The read-only result always reports two separate values when they are available, as
+in the web UI: `general_reputation` (the current chat's calculated score, grade, and
+component breakdown under the configured reputation policy) and `ai_reputation` (the
+stored global AI grade and behavior profile). No AI profile is generated on demand. A
+missing AI profile makes
+`ai_reputation` `null`; when `reputation.enabled` is false,
+`general_reputation_enabled` is false and `general_reputation` is `null`. Long profiles
+are truncated with a flag. Profiles are untrusted, potentially
+outdated data, not verified facts. The tool uses the same bounded Responses API loop
+and provider fallback as message history tools. Enable it in the web settings under
+AI > Creative Replies, in YAML, or with `AI_CREATIVE_REPLIES_REPUTATION_TOOL_ENABLED=true`.
 
 ---
 

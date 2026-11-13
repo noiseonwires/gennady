@@ -76,6 +76,44 @@ func TestSchemaVersionUpgrade(t *testing.T) {
 	assert.Equal(t, currentSchemaVersion, version)
 }
 
+func TestCreativeReplyRateLimitExemptionUpgradesVersionTwoDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "version-two.db")
+	db, err := InitLocal(path)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+	now := time.Now().UTC()
+	storeMsg(t, db, 100, -1, 999, "bot", "existing reply", now)
+	_, err = db.conn.Exec("ALTER TABLE message_info DROP COLUMN rate_limit_exempt")
+	require.NoError(t, err)
+	require.NoError(t, db.setSchemaVersion(2))
+	require.NoError(t, db.Close())
+
+	db, err = InitLocal(path)
+	require.NoError(t, err)
+	count, err := db.GetRecentBotMessageCount(999, -1, 24)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "existing replies must survive the upgrade and remain counted")
+	version, err := db.getSchemaVersion()
+	require.NoError(t, err)
+	assert.Equal(t, currentSchemaVersion, version)
+	require.Greater(t, version, 2)
+
+	require.NoError(t, db.MarkMessageRateLimitExempt(100, -1))
+	require.NoError(t, db.Close())
+	db, err = InitLocal(path)
+	require.NoError(t, err)
+	count, err = db.GetRecentBotMessageCount(999, -1, 24)
+	require.NoError(t, err)
+	assert.Zero(t, count, "the exemption must survive another restart")
+	message, err := db.GetMessageInfo(100, -1)
+	require.NoError(t, err)
+	assert.Equal(t, "existing reply", message.Text)
+}
+
 func TestSchemaVersionRejectsNewerDatabase(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.setSchemaVersion(currentSchemaVersion+1))

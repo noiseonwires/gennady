@@ -134,13 +134,22 @@ func toInboundMessage(m *models.Message) *telegram.Message {
 	out.Photo = toPhotoSizes(m.Photo)
 	out.MediaGroupID = m.MediaGroupID
 	if m.Sticker != nil {
-		out.Sticker = &telegram.Sticker{Emoji: m.Sticker.Emoji}
+		out.Sticker = &telegram.Sticker{
+			Emoji:      m.Sticker.Emoji,
+			FileID:     m.Sticker.FileID,
+			IsAnimated: m.Sticker.IsAnimated,
+			IsVideo:    m.Sticker.IsVideo,
+		}
+		if m.Sticker.Thumbnail != nil {
+			thumbnail := toPhotoSizes([]models.PhotoSize{*m.Sticker.Thumbnail})
+			out.Sticker.Thumbnail = &thumbnail[0]
+		}
 	}
 	if m.Dice != nil {
 		out.Dice = &telegram.Dice{Emoji: m.Dice.Emoji}
 	}
 	if m.Animation != nil {
-		out.Animation = &telegram.Animation{}
+		out.Animation = &telegram.Animation{FileID: m.Animation.FileID}
 	}
 	if m.Video != nil {
 		out.Video = &telegram.Video{}
@@ -155,7 +164,7 @@ func toInboundMessage(m *models.Message) *telegram.Message {
 		out.Audio = &telegram.Audio{}
 	}
 	if m.Document != nil {
-		out.Document = &telegram.Document{}
+		out.Document = &telegram.Document{FileID: m.Document.FileID, MIMEType: m.Document.MimeType}
 	}
 	if m.Poll != nil {
 		out.Poll = &telegram.Poll{}

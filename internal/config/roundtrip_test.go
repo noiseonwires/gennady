@@ -33,6 +33,8 @@ func fullySpecifiedConfig() *Config {
 	cfg.Database.Provider = "remote"
 	cfg.Database.URL = "libsql://example.turso.io"
 	cfg.Database.AuthToken = "db-auth-token"
+	cfg.Backup.Encrypt = true
+	cfg.Backup.EncryptionPassword = "a separate archive passphrase"
 
 	cfg.Admin.ChatID = -1001234567890
 	cfg.Admin.SuperAdminUserID = 42
@@ -70,12 +72,16 @@ func fullySpecifiedConfig() *Config {
 	cfg.AI.ContentModeration.Enabled = true
 	cfg.AI.ContentModeration.DefaultMuteMinutes = 30
 	cfg.AI.ContentModeration.AdminNotificationDelaySeconds = 7
+	cfg.AI.ContentModeration.FFmpegPath = `C:\Media Tools\ffmpeg.exe`
+	cfg.AI.ContentModeration.FFmpegEnabled = true
 	cfg.AI.ContentModeration.Rules = []ModerationRule{
 		{Trigger: "spam", Action: "delete", Description: "obvious spam"},
 		{Trigger: "insult", Action: "warn", NotifyAdmin: boolPtr(false)},
 	}
 	cfg.AI.CreativeReplies.MessageToolsEnabled = true
+	cfg.AI.CreativeReplies.ReputationToolEnabled = true
 	cfg.AI.CreativeReplies.MessageToolsMaxLimit = 17
+	cfg.AI.CreativeReplies.SkipRateLimitForAdmins = true
 	cfg.AI.CreativeReplies.ContextOnlyCurrentTopic = boolPtr(true)
 	cfg.AI.Rss.Feeds = []RssFeed{
 		{
@@ -153,8 +159,12 @@ func TestConfigDump_PreservesEveryValueCategory(t *testing.T) {
 	// Custom aggregate: ChatIDList
 	assert.Equal(t, []int64{-100111, -100222}, restored.Moderation.ChatIDs.IDs)
 	assert.Equal(t, 7, restored.AI.ContentModeration.AdminNotificationDelaySeconds)
+	assert.Equal(t, `C:\Media Tools\ffmpeg.exe`, restored.AI.ContentModeration.FFmpegPath)
+	assert.True(t, restored.AI.ContentModeration.FFmpegEnabled)
 	assert.True(t, restored.AI.CreativeReplies.MessageToolsEnabled)
+	assert.True(t, restored.AI.CreativeReplies.ReputationToolEnabled)
 	assert.Equal(t, 17, restored.AI.CreativeReplies.MessageToolsMaxLimit)
+	assert.True(t, restored.AI.CreativeReplies.SkipRateLimitForAdmins)
 	require.NotNil(t, restored.AI.CreativeReplies.ContextOnlyCurrentTopic)
 	assert.True(t, *restored.AI.CreativeReplies.ContextOnlyCurrentTopic)
 

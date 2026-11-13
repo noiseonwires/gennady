@@ -41,8 +41,8 @@ import (
 
 // redactedConfigValue is the sentinel returned in place of sensitive config
 // values by handleGetConfig. handleSaveConfig treats an incoming sensitive
-// field equal to this sentinel as "unchanged", so the real secret is never
-// exposed to or required from the client on a round-trip.
+// field equal to this sentinel as "unchanged". Secrets are only returned on an
+// explicit request to handleGetConfigSecret, never required for a round-trip.
 const redactedConfigValue = "__redacted__"
 
 // ExternalAPITester is implemented by the bot to run test calls from the web UI.
@@ -179,10 +179,10 @@ func (h *apiHandler) persistConfig() error {
 // ── Config endpoints ──
 
 func (h *apiHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	config.RLock()
 	values := config.GetConfigValues(h.config)
-	// Never expose secret values in plaintext over the API. Replace non-empty
-	// sensitive fields with a sentinel; handleSaveConfig treats the sentinel as
-	// "unchanged" so a round-trip save preserves the real secret.
+	config.RUnlock()
+	// Ordinary reads stay redacted; revealing a secret requires a separate request.
 	for key := range config.SensitiveConfigKeys() {
 		if v, ok := values[key]; ok {
 			if s, isStr := v.(string); isStr && s != "" {
@@ -191,6 +191,33 @@ func (h *apiHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jsonResponse(w, values)
+}
+
+func (h *apiHandler) handleGetConfigSecret(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		writeWebErr(w, errMethodNotAllowed)
+		return
+	}
+
+	key := r.URL.Query().Get("key")
+	if !config.SensitiveConfigKeys()[key] {
+		writeWebErr(w, errConfigSecretNotFound)
+		return
+	}
+
+	config.RLock()
+	value, ok := config.GetConfigValues(h.config)[key].(string)
+	config.RUnlock()
+	if !ok {
+		writeWebErr(w, errConfigSecretNotFound)
+		return
+	}
+	if key == "web_ui.password" && config.IsHashedWebUIPassword(value) {
+		writeWebErr(w, errConfigSecretHashed)
+		return
+	}
+	jsonResponse(w, map[string]string{"value": value})
 }
 
 func (h *apiHandler) handleGetConfigMeta(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +323,7 @@ func (h *apiHandler) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebUI: ignored %d env-overridden field(s) on save (set via environment, not editable here): %s", len(ignoredEnvKeys), strings.Join(ignoredEnvKeys, ", "))
 	}
 	log.Printf("WebUI: config updated (%d fields changed)", len(updates)-len(ignoredEnvKeys))
-	jsonResponse(w, map[string]string{"status": "ok", "message": "Configuration saved. Restart may be needed for scheduled event settings, such as enabling or disabling scheduled tasks or changing their time or period. A soft restart is enough."})
+	jsonResponse(w, map[string]string{"status": "ok", "message": "Configuration saved. Restart is required for web UI URL/path changes. Restart may also be needed for scheduled event settings, such as enabling or disabling scheduled tasks or changing their time or period. A soft restart is enough."})
 }
 
 func (h *apiHandler) handleGetRssFeeds(w http.ResponseWriter, r *http.Request) {

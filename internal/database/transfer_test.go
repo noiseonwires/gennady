@@ -18,6 +18,7 @@ import (
 func TestTableImportStrategy(t *testing.T) {
 	assert.Equal(t, importMerge, tableImportStrategy("message_info"))
 	assert.Equal(t, importMerge, tableImportStrategy("messages_for_deletion"))
+	assert.Equal(t, importMerge, tableImportStrategy("media_analysis_cache"))
 	assert.Equal(t, importMergeActions, tableImportStrategy("actions"))
 	assert.Equal(t, importMergeActions, tableImportStrategy("warnings"))
 	assert.Equal(t, importMergeActions, tableImportStrategy("user_names_history"))

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"gennadium/internal/config"
 
@@ -38,6 +39,68 @@ func TestParseRSSDate(t *testing.T) {
 
 	_, ok = parseRSSDate("not a date")
 	assert.False(t, ok)
+}
+
+func TestParseRSSDate_ZakonyCutoff(t *testing.T) {
+	cutoff := time.Date(2026, time.November, 4, 9, 35, 10, 0, time.UTC)
+	for _, raw := range []string{
+		"Thu, 05 Nov 2026 03:04:58 +0000",
+		"Thu, 05 Nov 2026 02:50:41 +0000",
+		"Wed, 04 Nov 2026 11:11:22 +0000",
+		"Wed, 04 Nov 2026 11:10:11 +0000",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			published, ok := parseRSSDate(raw)
+			require.True(t, ok)
+			assert.True(t, published.After(cutoff))
+		})
+	}
+}
+
+func TestFilterRSSItems_ZakonyCutoff(t *testing.T) {
+	cutoff := time.Date(2026, time.November, 4, 9, 35, 10, 0, time.UTC)
+	dates := []string{
+		"Thu, 05 Nov 2026 03:04:58 +0000",
+		"Thu, 05 Nov 2026 03:03:45 +0000",
+		"Thu, 05 Nov 2026 03:02:33 +0000",
+		"Thu, 05 Nov 2026 03:01:20 +0000",
+		"Thu, 05 Nov 2026 03:00:08 +0000",
+		"Thu, 05 Nov 2026 02:58:57 +0000",
+		"Thu, 05 Nov 2026 02:57:47 +0000",
+		"Thu, 05 Nov 2026 02:56:37 +0000",
+		"Thu, 05 Nov 2026 02:55:26 +0000",
+		"Thu, 05 Nov 2026 02:54:16 +0000",
+		"Thu, 05 Nov 2026 02:53:05 +0000",
+		"Thu, 05 Nov 2026 02:51:54 +0000",
+		"Thu, 05 Nov 2026 02:50:41 +0000",
+		"Wed, 04 Nov 2026 11:11:22 +0000",
+		"Wed, 04 Nov 2026 11:10:11 +0000",
+		"Wed, 04 Nov 2026 03:38:07 +0000",
+		"Wed, 04 Nov 2026 03:36:55 +0000",
+		"Wed, 04 Nov 2026 03:35:45 +0000",
+		"Wed, 04 Nov 2026 03:34:35 +0000",
+		"Wed, 04 Nov 2026 03:33:24 +0000",
+	}
+	items := make([]rssItem, 0, len(dates))
+	for _, raw := range dates {
+		items = append(items, rssItem{Title: raw, PubDate: raw})
+	}
+	selected := filterRSSItems("Zakony", items, cutoff)
+	require.Len(t, selected, 15)
+	assert.Equal(t, items[:15], selected)
+}
+
+func TestFilterRSSItems_CutoffAndInvalidDates(t *testing.T) {
+	cutoff := time.Date(2026, time.November, 4, 9, 35, 10, 0, time.UTC)
+	items := []rssItem{
+		{Title: "Same instant", PubDate: "2026-11-04T10:35:10+01:00"},
+		{Title: "Invalid", PubDate: "not a date"},
+		{Title: "Missing date"},
+		{Title: "New", PubDate: "2026-11-04T09:35:11Z"},
+		{Title: "Old", PubDate: "2026-11-04T09:35:09Z"},
+	}
+	assert.Equal(t, items[3:4], filterRSSItems("Feed", items, cutoff))
+	assert.Empty(t, filterRSSItems("Feed", nil, cutoff))
 }
 
 func TestRSSItemGetContent(t *testing.T) {

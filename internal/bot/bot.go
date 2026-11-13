@@ -75,6 +75,9 @@ type Bot struct {
 	// to make time-dependent behaviour deterministic.
 	now func() time.Time
 
+	mediaAnalysisMu      sync.Mutex
+	mediaAnalysisPending map[string]*mediaAnalysisCall
+
 	config    *config.Config
 	db        *database.DB
 	stopCh    chan struct{}

@@ -84,7 +84,7 @@ Placeholders are replaced before the prompt is sent. Each prompt only supports i
 | Prompt (`ai.…`) | Placeholders |
 | --- | --- |
 | `content_moderation.prompt` | `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}`, `{{reply_to}}`, `{{new_user_rules}}` |
-| `content_moderation.warning_prompt` | `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
+| `content_moderation.warning_prompt` | `{{username}}`, `{{message}}`, `{{user_message}}`, `{{moderation_verdict}}`, `{{light_verdict}}`, `{{full_verdict}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
 | `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
 | `morning_greeting.prompt` | `{{weekday}}`, `{{date}}`, `{{weather}}`, `{{weather_ru}}`, `{{holidays}}`, `{{events}}` |
 | `daily_summary.prompt` | `{{messages}}` |
@@ -94,6 +94,13 @@ Placeholders are replaced before the prompt is sent. Each prompt only supports i
 | `user_profiles.update_prompt` | `{{username}}`, `{{messages}}`, `{{existing_profile}}`, `{{previous_days_messages}}` |
 | `website_watch.prompt` | `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}` |
 | `translation_prompt` / `rss.*` | `{{text}}` |
+
+For warnings, `{{moderation_verdict}}` contains the decision/reason when available
+(stored reason for manual warnings); light/full verdicts are available during
+automatic moderation. `{{message}}` and the sentence-wrapped `{{user_message}}`
+contain safety flags instead of text when Content Security blocked the message.
+For creative replies, `{{message}}` includes available image analysis alongside
+the text/caption.
 
 **`{{user_profile}}` vs `{{user_reputation}}`:**
 
@@ -393,6 +400,8 @@ it through the **same** moderation rules. Describers use the fallback chain
 
 ```yaml
 ai:
+  content_moderation:
+    warning_use_full_model: false  # write warnings with the light model; keep full-model verdict checks
   light_model:
     - provider: "azure"
       endpoint: "https://YOUR.openai.azure.com/"
@@ -521,8 +530,16 @@ surrounding messages; `{{quote}}` (if used) carries the specific quoted message.
 
 - **Moderation runs on the light model by default** - keep it cheap and fast, and keep verdicts
   to one word so responses stay tiny.
-- Use the **full model** only where quality matters (creative replies, summaries) via each
-  feature's `use_full_model: true`.
+- **Start with the light model for all features that offer model selection.** Modern light
+  models work well for creative replies, daily summaries, message and link summaries, morning
+  greetings, warnings, RSS processing, and other routine tasks. Set each feature's `use_full_model: false`
+  to keep token costs down; switch individual features to `true` only if their results need it.
+- Reserve a **stronger full model for moderation-verdict double-checks**. It confirms potential
+  violations flagged by the light model; `ai.content_moderation.full_model_first_messages`
+  optionally also checks a new user's first N messages, even when the light model clears them.
+- For **warning text**, set `ai.content_moderation.warning_use_full_model: false` (default:
+  `true`). This applies to automatic and manual warnings without changing moderation-verdict
+  double-checks.
 - Both `light_model` and `full_model` accept a **list of endpoints** with automatic failover:
   if the first endpoint errors, the bot rotates to the next.
 

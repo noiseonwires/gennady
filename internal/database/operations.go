@@ -798,8 +798,9 @@ func (db *DB) UpdateMessageExtraInfo(messageID int, chatID int64, extraInfo stri
 	}, "update message extra info")
 }
 
-// UpdateMessageModerationReason stores the AI moderation verdict explanation for
-// an existing message. It is a no-op when the message is not in message_info
+// UpdateMessageModerationReason stores the AI moderation explanation (or labels
+// when no explanation is given) for an existing message. It is a no-op when the
+// message is not in message_info
 // (we only annotate messages we already track). Called once per AI moderation
 // pass so the reason is captured regardless of which action(s) the verdict
 // triggered (warn / mute / delete / report).
@@ -1082,15 +1083,9 @@ func (db *DB) SearchMessagesForAI(options AIMessageSearchOptions) ([]MessageInfo
 		where = append(where, "m.user_id = ?")
 		args = append(args, *options.UserID)
 	} else if userName := strings.TrimSpace(options.UserName); userName != "" {
-		normalized := strings.ToLower(strings.TrimPrefix(userName, "@"))
-		where = append(where, `(LOWER(LTRIM(COALESCE(m.username, ''), '@')) = ? OR EXISTS (
-			SELECT 1 FROM user_names_history unh
-			WHERE unh.user_id = m.user_id AND (
-				LOWER(LTRIM(TRIM(COALESCE(unh.username, '')), '@')) = ? OR
-				LOWER(TRIM(COALESCE(unh.display_name, ''))) = LOWER(?)
-			)
-		))`)
-		args = append(args, normalized, normalized, userName)
+		filter, userArgs := aiUserNameFilter(userName)
+		where = append(where, filter)
+		args = append(args, userArgs...)
 	}
 	if options.TopicID != nil {
 		where = append(where, "m.message_thread_id = ?")
@@ -1135,6 +1130,46 @@ func (db *DB) SearchMessagesForAI(options AIMessageSearchOptions) ([]MessageInfo
 		messages = append(messages, message)
 	}
 	return messages, total, rows.Err()
+}
+
+func aiUserNameFilter(userName string) (string, []any) {
+	normalized := strings.ToLower(strings.TrimPrefix(userName, "@"))
+	return `(LOWER(LTRIM(COALESCE(m.username, ''), '@')) = ? OR EXISTS (
+		SELECT 1 FROM user_names_history unh
+		WHERE unh.user_id = m.user_id AND (
+			LOWER(LTRIM(TRIM(COALESCE(unh.username, '')), '@')) = ? OR
+			LOWER(TRIM(COALESCE(unh.display_name, ''))) = LOWER(?)
+		)
+	))`, []any{normalized, normalized, userName}
+}
+
+// FindUserIDsForAI resolves a user within the current chat's stored messages.
+// At most two distinct IDs are returned so callers can reject ambiguous names.
+func (db *DB) FindUserIDsForAI(chatID int64, user string) ([]int64, error) {
+	user = strings.TrimSpace(user)
+	if chatID == 0 || user == "" {
+		return nil, fmt.Errorf("AI user lookup requires a chat ID and user")
+	}
+	filter, args := aiUserNameFilter(user)
+	if userID, err := strconv.ParseInt(user, 10, 64); err == nil {
+		filter, args = "m.user_id = ?", []any{userID}
+	}
+	queryArgs := append([]any{chatID}, args...)
+	rows, err := db.conn.Query(`SELECT DISTINCT m.user_id FROM message_info m
+		WHERE m.chat_id = ? AND m.user_id <> 0 AND `+filter+` ORDER BY m.user_id LIMIT 2`, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // buildMessageFilter turns the Web UI message-list filters into parameterized
@@ -1924,10 +1959,21 @@ func (db *DB) GetLatestBotMessageID(botUserID int64, moderationChatID int64) (in
 	return messageID, nil
 }
 
-// GetRecentBotMessageCount returns the count of bot messages in the specified time window
+// MarkMessageRateLimitExempt excludes a stored message from
+// GetRecentBotMessageCount (used for creative replies triggered by admins
+// when the admin rate-limit bypass is enabled).
+func (db *DB) MarkMessageRateLimitExempt(messageID int, chatID int64) error {
+	return db.retryOnTransientError(func() error {
+		_, err := db.conn.Exec(`UPDATE message_info SET rate_limit_exempt = 1 WHERE message_id = ? AND chat_id = ?`, messageID, chatID)
+		return err
+	}, "mark message rate-limit exempt")
+}
+
+// GetRecentBotMessageCount returns the count of bot messages in the specified
+// time window, excluding messages marked rate-limit exempt.
 func (db *DB) GetRecentBotMessageCount(botUserID int64, chatID int64, hoursBack int) (int, error) {
 	query := `SELECT COUNT(*) FROM message_info 
-		WHERE user_id = ? AND chat_id = ? AND timestamp >= ?`
+		WHERE user_id = ? AND chat_id = ? AND timestamp >= ? AND rate_limit_exempt = 0`
 
 	timeThreshold := time.Now().Add(-time.Duration(hoursBack) * time.Hour)
 

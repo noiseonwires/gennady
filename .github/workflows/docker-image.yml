@@ -88,12 +88,26 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            GO_VERSION=1.27.1
+            GO_VERSION=1.27.3
             GIT_COMMIT=${{ steps.build_meta.outputs.SHORT_SHA }}
             BUILD_TIME=${{ steps.build_meta.outputs.BUILD_TIME }}
             VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Check non-root backup directory permissions
+        env:
+          IMAGE: ${{ steps.img.outputs.name }}@${{ steps.build.outputs.digest }}
+        run: |
+          docker run --rm --entrypoint /bin/sh "$IMAGE" -ec '
+            test "$(id -u):$(id -g)" = "65532:65532"
+            test "$PWD" = /app
+            probe="$(mktemp ./.probe_XXXXXX)"
+            rm "$probe"
+            scratch="$(mktemp -d ./.backup_XXXXXX)"
+            rmdir "$scratch"
+            test -r ./config.example.yaml
+            test -x ./gennadium
+          '
       - name: Scan image (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:

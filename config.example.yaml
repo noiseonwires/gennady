@@ -168,8 +168,11 @@ backup:
   interval_hours: 48                # run every N hours
   file_prefix: ""                   # prepended to "moderation.db" (e.g. "chat1_" → chat1_moderation.db)
   include_config: true              # include the config_values table (contains secrets when DB is the config source)
+  encrypt: false                    # opt-in compressed AES-256 ZIP for any destination; no external tools required
+  encryption_password: ""          # required when encrypt is true; keep a separate copy for recovery
   notify_super_admin_on_failure: false  # DM the super-admin with details when a scheduled backup fails
-  # Scratch space for the snapshot; the file is deleted right after the upload.
+  # Scratch space for the plaintext snapshot and optional encrypted ZIP;
+  # both files are deleted after the upload, including on failure.
   # Defaults to the folder of database.path, falling back to the system temp dir
   # when that is not writable. In containers (especially with a remote database,
   # where database.path may point at a folder that was never created) set this to
@@ -237,7 +240,7 @@ web_ui:
   password: ""             # Admin panel password (leave empty to disable auth)
   otp_enabled: true        # Require OTP via Telegram as 2FA (needs super_admin_user_id set)
   moderator_path_prefix: "/mod"  # URL path prefix for the isolated, limited moderator web UI (must differ from path_prefix)
-  public_url: ""           # Externally-reachable base URL without path prefix (e.g. https://bot.example.com) for moderator login links; falls back to the webhook URL host when empty
+  public_url: ""           # Scheme + host only (e.g. https://bot.example.com), no path; used for moderator login links. Empty = webhook scheme+host. Prefixes are full paths and may be nested (e.g. /admin2 and /admin2/mod).
 
 # ─── User Profiles (general tracking, not AI) ────────────────────────
 # When enabled, the bot records per-user data on every message in moderation chats:
@@ -370,7 +373,24 @@ ai:
     content_safety_enabled: false
     content_safety_endpoint: "https://YOUR_SAFETY_ENDPOINT.cognitiveservices.azure.com/"
     content_safety_api_key: "YOUR_SAFETY_KEY_HERE"
-    # Send each image to the first enabled model with use_for_image_analysis,
+    # Photos, animations and stickers share this analysis chain. Animations use
+    # first/middle/last-frame PNG sheets; TGS stickers use Telegram thumbnails.
+    # Opt in to sticker/animation checks; false skips them, including cache hits.
+    # Photo analysis and text/caption moderation are unaffected by this switch.
+    ffmpeg_enabled: false
+    # FFmpeg defaults to the Docker location below; customize for your host.
+    # These are separate executables, usually bundled in the same distribution:
+    # ffmpeg extracts frames/converts images; ffprobe reads metadata/counts frames.
+    # Configure only ffmpeg; ffprobe is found automatically in the same directory.
+    # If ffprobe is missing, conversion fails with a logged error.
+    # Empty/unset ffmpeg_path uses "/usr/bin/ffmpeg"; use ffmpeg_enabled to opt out.
+    # Docker includes both tools: set ffmpeg_enabled to true to use them.
+    # Windows: configure 'C:\ffmpeg\bin\ffmpeg.exe' and keep
+    # 'C:\ffmpeg\bin\ffprobe.exe' beside it. A PATH command "ffmpeg" also works.
+    ffmpeg_path: "/usr/bin/ffmpeg"
+    # Successful analyses are cached in the DB without expiration, keyed by
+    # media content and analysis settings; captions are moderated separately.
+    # Send each uncached image to the first enabled model with use_for_image_analysis,
     # failing over across the remaining opted-in models before Azure Vision and
     # OCR.space. Keep this off if no configured deployment supports image input.
     ai_image_analysis_enabled: false
@@ -388,7 +408,7 @@ ai:
     # Also analyze images in chats/topics listed in moderation.excluded_topics,
     # so their recorded history still contains the OCR text and description.
     # Those messages are still never AI-moderated (Content Safety verdicts on
-    # images are ignored there). Costs one image API call per photo.
+    # images are ignored there). Image API calls are avoided on cache hits.
     vision_outside_moderation: false
     # On a new user's first message, screen their whole public profile: name,
     # bio and profile photo, plus their linked personal channel (name,
@@ -485,9 +505,15 @@ ai:
         «{{message}}»
 
         Ответ (только ярлыки через запятую):
+    # false uses the light model for warning text only; moderation checks are unchanged.
+    warning_use_full_model: true
     # Variables: {{username}}, {{user_message}}, {{chat_rules}}, {{mute_info}},
     # {{user_profile}}, {{user_reputation}}, {{reputation}},
-    # {{reputation_score}}, {{reputation_grade}}
+    # {{reputation_score}}, {{reputation_grade}}, {{light_verdict}},
+    # {{full_verdict}}, {{moderation_verdict}}, {{message}}.
+    # {{moderation_verdict}} contains the decision/reason when available.
+    # {{message}} is raw prompt content; {{user_message}} wraps it in a sentence.
+    # Content-security flags replace blocked message text in both placeholders.
     warning_prompt:
       system: |
         Ты - профессиональный модератор в русскоязычном Telegram чате по имени Геннадий.
@@ -501,11 +527,18 @@ ai:
         - Длиной 1-2 предложения
 
         Правила чата: {{chat_rules}}
-      user: "Создай персонализированное предупреждение для пользователя {{username}}.{{user_message}}"
+      user: |
+        Создай персонализированное предупреждение для пользователя {{username}}.{{user_message}}
+        Причина предупреждения: {{moderation_verdict}}
+        Вердикт легкой модели: {{light_verdict}}
+        Вердикт полной модели: {{full_verdict}}
 
   creative_replies:
     enabled: true
     use_full_model: true
+    # {{message}} includes the caption/text and available image analysis.
+    # Enabled image analysis also runs for reply/mention triggers in excluded
+    # moderation topics and for whitelisted senders, without moderating them.
     # Let the model decide whether current information is needed. Requires at
     # least one selected light/full model with use_for_web_search: true.
     # Uses the Responses API web_search tool; failures fall back to chat completions.
@@ -517,10 +550,16 @@ ai:
     message_tools_enabled: false
     # Maximum messages returned by one tool call (default 20, hard ceiling 50).
     message_tools_max_limit: 20
+    # Read-only AI profile and reputation score lookup by ID, username or display
+    # name for users known in this chat. Independent of message history tools.
+    reputation_tool_enabled: false
     # Keep all stored-message context inside the triggering topic/thread.
     context_only_current_topic: true
     max_messages: 3
     time_window: 3
+    # Let the super-admin and admins of any moderation/admin chat bypass the
+    # chat-wide rate limit. Their replies do not count toward the shared limit.
+    skip_rate_limit_for_admins: false
     # Where creative replies are allowed. Empty = every moderation chat, any
     # topic. Use topic: -1 to enable a whole chat, topic: 0 for the main area.
     #   included_topics: [{chat: -100111, topic: -1}]

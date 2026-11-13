@@ -67,13 +67,12 @@ func (b *Bot) moderatorWebLoginAvailable() bool {
 	if b.effectivePublicURL() == "" {
 		return false
 	}
-	prefix := strings.TrimRight(strings.TrimSpace(b.config.WebUI.PathPrefix), "/")
-	modPrefix := strings.TrimRight(strings.TrimSpace(b.config.WebUI.ModeratorPathPrefix), "/")
+	prefix, modPrefix := b.config.WebUI.PathPrefixes()
 	return modPrefix != "" && modPrefix != prefix
 }
 
 // effectivePublicURL returns the externally-reachable base URL of the web UI
-// (scheme + host, no path prefix), used to build moderator one-time login
+// (scheme + host), used to build moderator one-time login
 // links. It prefers web_ui.public_url; when that is unset it falls back to the
 // scheme+host of webhook.url, so a webhook deployment needs no extra config.
 // Returns "" when neither is available.
@@ -97,9 +96,11 @@ func (b *Bot) handleSuperAdminCommand(message *tgbotapi.Message) bool {
 
 	replyOK := func() {
 		b.tg.SendMessage(telegram.SendMessageParams{
-			ChatID:           message.Chat.ID,
-			Text:             "OK",
-			ReplyToMessageID: message.MessageID,
+			ChatID:             message.Chat.ID,
+			Text:               "OK",
+			ReplyToMessageID:   message.MessageID,
+			RequireReplyTarget: true,
+			MessageThreadID:    messageTopic(message),
 		})
 	}
 
@@ -306,9 +307,11 @@ func (b *Bot) handleSuperAdminCommand(message *tgbotapi.Message) bool {
 		if err != nil {
 			log.Printf("Super admin: message not found in database: %v", err)
 			b.tg.SendMessage(telegram.SendMessageParams{
-				ChatID:           message.Chat.ID,
-				Text:             "❌ Message not found in database.",
-				ReplyToMessageID: message.MessageID,
+				ChatID:             message.Chat.ID,
+				Text:               "❌ Message not found in database.",
+				ReplyToMessageID:   message.MessageID,
+				RequireReplyTarget: true,
+				MessageThreadID:    messageTopic(message),
 			})
 			return true
 		}
@@ -327,9 +330,11 @@ func (b *Bot) handleSuperAdminCommand(message *tgbotapi.Message) bool {
 			replyText += "\n\n📋 Full info:\n" + string(infoJSON)
 		}
 		b.tg.SendMessage(telegram.SendMessageParams{
-			ChatID:           message.Chat.ID,
-			Text:             replyText,
-			ReplyToMessageID: message.MessageID,
+			ChatID:             message.Chat.ID,
+			Text:               replyText,
+			ReplyToMessageID:   message.MessageID,
+			RequireReplyTarget: true,
+			MessageThreadID:    messageTopic(message),
 		})
 		return true
 

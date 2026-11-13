@@ -68,9 +68,24 @@ type TextQuote struct {
 	IsManual bool
 }
 
-// Sticker carries the only sticker field the bot reads.
+// Sticker carries the file metadata needed for image analysis.
 type Sticker struct {
-	Emoji string
+	Emoji      string
+	FileID     string
+	IsAnimated bool
+	IsVideo    bool
+	Thumbnail  *PhotoSize
+}
+
+// Animation represents a GIF or silent MPEG-4 animation.
+type Animation struct {
+	FileID string
+}
+
+// Document retains the metadata needed to recognize GIFs sent as files.
+type Document struct {
+	FileID   string
+	MIMEType string
 }
 
 // Dice carries the only dice field the bot reads.
@@ -81,12 +96,10 @@ type Dice struct {
 // The following media markers exist only so the bot can detect the presence of
 // a given media kind on an inbound message. They intentionally carry no fields.
 type (
-	Animation struct{}
 	Video     struct{}
 	VideoNote struct{}
 	Voice     struct{}
 	Audio     struct{}
-	Document  struct{}
 	Poll      struct{}
 	Location  struct{}
 	Contact   struct{}

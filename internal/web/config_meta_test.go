@@ -43,3 +43,20 @@ func TestGetConfigMeta(t *testing.T) {
 	assert.Equal(t, len(fields), len(fields2))
 	assert.Equal(t, len(sections), len(sections2))
 }
+
+func TestWarningUseFullModelMeta(t *testing.T) {
+	fields, _ := GetConfigMeta()
+	for _, field := range fields {
+		if field.Key == "ai.content_moderation.warning_use_full_model" {
+			assert.Equal(t, "bool", field.Type)
+			assert.Equal(t, "ai_content_moderation", field.Section)
+			assert.Equal(t, "Warnings: Use Full Model", field.LabelEN)
+			assert.NotEmpty(t, field.LabelRU)
+			assert.NotEqual(t, field.LabelEN, field.LabelRU)
+			assert.NotEmpty(t, field.DescEN)
+			assert.NotEmpty(t, field.DescRU)
+			return
+		}
+	}
+	t.Fatal("warning model switch is missing from web configuration metadata")
+}

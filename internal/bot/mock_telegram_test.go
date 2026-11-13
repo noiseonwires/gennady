@@ -60,9 +60,11 @@ func (m *mockTelegram) SendMessage(p telegram.SendMessageParams) (telegram.Messa
 		return m.SendFunc(p)
 	}
 	return telegram.Message{
-		MessageID: id,
-		Chat:      telegram.Chat{ID: p.ChatID},
-		Text:      p.Text,
+		MessageID:        id,
+		Chat:             telegram.Chat{ID: p.ChatID},
+		Text:             p.Text,
+		ReplyToMessageID: p.ReplyToMessageID,
+		MessageThreadID:  p.MessageThreadID,
 	}, nil
 }
 

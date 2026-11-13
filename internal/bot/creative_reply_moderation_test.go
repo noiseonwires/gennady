@@ -3,11 +3,15 @@
 package bot
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"gennadium/internal/config"
+	"gennadium/internal/telegram"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,11 +113,86 @@ func TestCreativeReply_PlainReplyToBotGeneratesReply(t *testing.T) {
 	creativeModerationConfig(b)
 
 	msg := testMessage(-100, 7, 100, "thanks for that")
+	msg.Chat.IsForum = true
+	msg.MessageThreadID = 42
 	msg.ReplyToMessage = testMessage(-100, b.botSelf.ID, 50, "bot said something")
 
 	b.creativeReply(msg, msg, false)
 
 	require.Len(t, tg.SentMessages, 1, "an ordinary reply to the bot must still receive a creative reply")
 	assert.Equal(t, 100, tg.SentMessages[0].ReplyToMessageID)
+	assert.Equal(t, 42, tg.SentMessages[0].MessageThreadID)
 	assert.Contains(t, tg.SentMessages[0].Text, "a witty reply")
+}
+
+func TestCreativeReplyMessageIncludesPhotoAnalysis(t *testing.T) {
+	for _, scenario := range []string{"caption", "photo only", "excluded topic", "whitelisted", "excluded topic flagged", "whitelisted flagged"} {
+		t.Run(scenario, func(t *testing.T) {
+			analyses := 0
+			b, tg, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					_, _ = w.Write(testPNG())
+					return
+				}
+				if strings.Contains(r.URL.Path, "contentsafety") {
+					_, _ = w.Write([]byte(`{"categoriesAnalysis":[{"category":"Violence","severity":4}]}`))
+					return
+				}
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				if strings.Contains(string(body), "image_url") {
+					analyses++
+					_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"a cat wearing sunglasses"}}]}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"a witty reply"}}]}`))
+			})
+			creativeModerationConfig(b)
+			b.config.AI.CreativeReplies.Prompt = config.PromptPair{System: "{{message}}", User: "{{message}}"}
+			b.config.AI.ContentModeration.AIImageAnalysisEnabled = true
+			model := fullModelConfig()
+			model.UseForImageAnalysis = true
+			b.config.AI.FullModel = config.AIModelConfigs{Configs: []config.AIModelConfig{model}}
+			tg.GetFileFunc = func(id string) (telegram.File, error) {
+				return telegram.File{FileID: id, DownloadURL: "https://files.telegram.example/photo"}, nil
+			}
+			if strings.HasSuffix(scenario, "flagged") {
+				b.config.AI.ContentModeration.ContentSafetyEnabled = true
+				b.config.AI.ContentModeration.ContentSafetyEndpoint = "https://safety.example.com"
+			}
+			if strings.HasPrefix(scenario, "excluded topic") {
+				b.config.Moderation.ExcludedTopics = config.ChatTopicList{
+					Refs: []config.ChatTopicRef{{Chat: -100, Topic: config.TopicAny}},
+				}
+			}
+			if strings.HasPrefix(scenario, "whitelisted") {
+				b.config.Admin.WhitelistUserIDs = []int64{7}
+			}
+			message := testMessage(-100, 7, 100, "")
+			message.Photo = []telegram.PhotoSize{{FileID: "photo"}}
+			if scenario == "photo only" {
+				message.ReplyToMessage = testMessage(-100, b.botSelf.ID, 50, "bot message")
+			} else {
+				message.Caption = "@testbot look at this"
+			}
+			mc := b.newInboundContext(message, false)
+			b.stageEnhance(mc)
+			assert.False(t, mc.Flagged, "creative image analysis must not enable moderation for excluded/whitelisted messages")
+			b.stageModerate(mc)
+			b.runCreativeReply(mc)
+
+			assert.Equal(t, 1, analyses, "reuse the enhancement, do not analyze the photo again")
+			require.Len(t, tg.SentMessages, 1)
+			var request struct{ Messages []Message }
+			require.NoError(t, json.Unmarshal([]byte(rt.last().Body), &request))
+			require.Len(t, request.Messages, 2)
+			for _, prompt := range request.Messages {
+				assert.Contains(t, prompt.Content, "a cat wearing sunglasses")
+				if message.Caption != "" {
+					assert.Contains(t, prompt.Content, message.Caption)
+				}
+			}
+			assert.Empty(t, message.Text, "keep the inbound message untouched")
+		})
+	}
 }

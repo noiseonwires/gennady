@@ -21,11 +21,15 @@ Gennady is a prompt-driven AI moderation and community intelligence bot for Tele
 
 Gennady watches your chat, understands text and images in context, and acts on the rules you
 define in plain language. Route each AI verdict to the action you choose: delete, mute, warn,
-report, summarize, or hand off to an admin. He has seen every spam scheme, can write a warning
+report, summarize, or hand off to an admin. He helps spot spam, can write a warning
 that lands with uncomfortable precision, and still turns around to greet the chat in the
 morning with the weather, holidays, and a history fact.
 
 He runs a tight room. But it is still a warm room.
+
+Gennady works in group chats **and in comments under channel posts**. Telegram hosts those
+comments as threads in a linked discussion group - effectively a chat the bot can moderate.
+Add the bot as an admin of that discussion group and configure it as a moderated chat.
 
 Built in Go. Runs as a single static binary, a Docker container, or a cloud service. Uses
 SQLite locally or a remote database in the cloud. Free and open source under the AGPL-3.
@@ -40,7 +44,7 @@ SQLite locally or a remote database in the cloud. Free and open source under the
 
 Most moderation bots make you pick from a fixed menu of rules. Gennady lets you *describe* the
 behavior you want in natural language and routes the AI's verdict to the action you choose.
-That means the same bot can run a strict legal-news channel and a relaxed hobby group - you
+That means the same bot can moderate a strict legal-news channel's comments and a relaxed hobby group - you
 just change the prompt.
 
 ---
@@ -59,9 +63,10 @@ just change the prompt.
   permanent), auto-warn, or report to the admin chat for a human decision - per rule.
 - **AI-generated warnings.** When a user crosses a line, the bot can write a personalized,
   context-aware warning instead of a canned message.
-- **Light and full AI models.** Route cheap, high-volume checks to a fast/cheap AI model and
-  reserve a stronger AI model for nuanced tasks - independently per feature, with automatic
-  length-based switching.
+- **Light and full AI models.** Modern light models work well for many routine tasks. Start
+  with one for creative replies, summaries, morning greetings, warnings, and other configurable features
+  to keep token costs down; reserve a stronger model for moderation-verdict double-checks.
+  See the [cost-control recipe](docs/cookbook.md) for per-feature settings.
 - **Reputation-aware profiles.** Optional AI user profiles let the moderator weigh a message
   against the user's known style and history, reducing false positives for regulars and
   tightening up on repeat offenders.

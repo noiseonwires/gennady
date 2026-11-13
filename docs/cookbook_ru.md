@@ -85,7 +85,7 @@ flowchart LR
 | Промпт (`ai.…`) | Плейсхолдеры |
 | --- | --- |
 | `content_moderation.prompt` | `{{message}}`, `{{chat_rules}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}`, `{{reply_to}}`, `{{new_user_rules}}` |
-| `content_moderation.warning_prompt` | `{{username}}`, `{{user_message}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
+| `content_moderation.warning_prompt` | `{{username}}`, `{{message}}`, `{{user_message}}`, `{{moderation_verdict}}`, `{{light_verdict}}`, `{{full_verdict}}`, `{{chat_rules}}`, `{{mute_info}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
 | `creative_replies.prompt` | `{{message}}`, `{{context}}`, `{{quote}}`, `{{user_profile}}`, `{{user_reputation}}`, `{{reputation_score}}`, `{{reputation_grade}}` |
 | `morning_greeting.prompt` | `{{weekday}}`, `{{date}}`, `{{weather}}`, `{{weather_ru}}`, `{{holidays}}`, `{{events}}` |
 | `daily_summary.prompt` | `{{messages}}` |
@@ -95,6 +95,13 @@ flowchart LR
 | `user_profiles.update_prompt` | `{{username}}`, `{{messages}}`, `{{existing_profile}}`, `{{previous_days_messages}}` |
 | `website_watch.prompt` | `{{name}}`, `{{url}}`, `{{diff}}`, `{{previous}}`, `{{current}}`, `{{marker}}` |
 | `translation_prompt` / `rss.*` | `{{text}}` |
+
+Для предупреждений `{{moderation_verdict}}` содержит решение/причину, если есть
+(сохранённую причину для ручных предупреждений); вердикты лёгкой и полной моделей
+доступны при автоматической модерации. `{{message}}` и обёрнутый в предложение
+`{{user_message}}` содержат флаги безопасности вместо текста, если Content Security
+заблокировал сообщение. Для креативных ответов `{{message}}` включает доступный
+анализ изображения вместе с текстом/подписью.
 
 **`{{user_profile}}` против `{{user_reputation}}`:**
 
@@ -393,6 +400,8 @@ ai:
 
 ```yaml
 ai:
+  content_moderation:
+    warning_use_full_model: false  # лёгкая модель для предупреждений; полная остаётся для проверки вердиктов
   light_model:
     - provider: "azure"
       endpoint: "https://YOUR.openai.azure.com/"
@@ -521,8 +530,18 @@ ai:
 
 - **Модерация по умолчанию идёт на лёгкой модели** - держите её дешёвой и быстрой, а вердикты в
   одно слово, чтобы ответы оставались крошечными.
-- Используйте **полную модель** только там, где важно качество (креативные ответы, сводки) через
-  `use_full_model: true` у каждой функции.
+- **Начните с лёгкой модели для всех функций, где доступен выбор модели.** Современные лёгкие
+  модели хорошо справляются с креативными ответами, ежедневными сводками, сводками сообщений
+  и ссылок, утренними приветствиями, предупреждениями, обработкой RSS и другими повседневными задачами.
+  Установите у каждой функции `use_full_model: false`, чтобы экономить на токенах;
+  переключайте отдельные функции на `true`, только если результат требует улучшения.
+- Оставьте **более сильную полную модель для перепроверки вердиктов модерации**. Она подтверждает
+  потенциальные нарушения, найденные лёгкой моделью; `ai.content_moderation.full_model_first_messages`
+  при необходимости дополнительно проверяет первые N сообщений нового пользователя, даже
+  если лёгкая модель не нашла нарушений.
+- Для **текста предупреждений** установите `ai.content_moderation.warning_use_full_model: false`
+  (по умолчанию: `true`). Настройка действует на автоматические и ручные предупреждения
+  и не меняет перепроверку вердиктов модерации.
 - И `light_model`, и `full_model` принимают **список эндпоинтов** с автоматическим
   резервированием: если первый эндпоинт даёт ошибку, бот переключается на следующий.
 

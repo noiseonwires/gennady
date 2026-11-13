@@ -209,8 +209,8 @@ func GetConfigValues(cfg *Config) map[string]interface{} {
 }
 
 // SensitiveConfigKeys returns the set of dot-path config keys whose values are
-// marked sensitive (secrets such as tokens, API keys and passwords) and must
-// not be exposed in plaintext over the API.
+// marked sensitive (secrets such as tokens, API keys and passwords) and must be
+// redacted in ordinary API responses.
 func SensitiveConfigKeys() map[string]bool {
 	fields, _ := ReflectConfigMeta()
 	keys := make(map[string]bool, len(fields))

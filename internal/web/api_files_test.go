@@ -5,6 +5,8 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/yeka/zip"
 
 	"gennadium/internal/config"
 	"gennadium/internal/database"
@@ -47,6 +50,58 @@ func newFileHandler(t *testing.T) *apiHandler {
 		pathPrefix: "/admin",
 		operations: newOperationStore(),
 		configFile: filepath.Join(dir, "config.yaml"),
+	}
+}
+
+// ── Manual backup ──
+
+func TestRunBackup_EncryptionWithSchedulingDisabled(t *testing.T) {
+	for _, password := range []string{"", "a separate backup passphrase"} {
+		t.Run(fmt.Sprintf("password_set=%t", password != ""), func(t *testing.T) {
+			h := newFileHandler(t)
+			dest, scratch := t.TempDir(), t.TempDir()
+			h.config.Backup = config.BackupConfig{
+				Target: "local", LocalPath: dest, TempDir: scratch, IncludeConfig: true,
+				Encrypt: true, EncryptionPassword: password,
+			}
+			rr := httptest.NewRecorder()
+			h.handleRunBackup(rr, httptest.NewRequest(http.MethodPost, "/api/files/backup", nil))
+			require.Equal(t, http.StatusAccepted, rr.Code)
+			var started operation
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &started))
+			require.Eventually(t, func() bool {
+				op, ok := h.operations.get(started.ID)
+				return ok && op.Status != operationRunning
+			}, 5*time.Second, time.Millisecond)
+			op, ok := h.operations.get(started.ID)
+			require.True(t, ok)
+			if password == "" {
+				assert.Equal(t, operationFailed, op.Status)
+				assert.Contains(t, op.Error, "backup.encryption_password")
+				entries, err := os.ReadDir(dest)
+				require.NoError(t, err)
+				assert.Empty(t, entries)
+			} else {
+				require.Equal(t, operationSucceeded, op.Status, "%s", op.Error)
+				assert.Contains(t, op.Message, "moderation.db.zip")
+				assert.NotContains(t, op.Message, password)
+				r, err := zip.OpenReader(filepath.Join(dest, "moderation.db.zip"))
+				require.NoError(t, err)
+				defer r.Close()
+				require.Len(t, r.File, 1)
+				assert.True(t, r.File[0].IsEncrypted())
+				r.File[0].SetPassword(password)
+				db, err := r.File[0].Open()
+				require.NoError(t, err)
+				defer db.Close()
+				data, err := io.ReadAll(db)
+				require.NoError(t, err)
+				assert.True(t, bytes.HasPrefix(data, []byte("SQLite format 3\x00")))
+			}
+			entries, err := os.ReadDir(scratch)
+			require.NoError(t, err)
+			assert.Empty(t, entries)
+		})
 	}
 }
 

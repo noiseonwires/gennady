@@ -35,6 +35,15 @@ See [config.md](config.md) for what each key means.
 - **Go 1.26+** if you build from source (not needed for Docker).
 - *Optional:* Azure OpenAI / OpenAI-compatible API keys for AI features; Azure Vision or
   OCR.space for image moderation.
+- **FFmpeg with sibling `ffprobe`** for optional animation/sticker analysis. Install with
+  `sudo apt-get install ffmpeg` on Debian/Ubuntu; Docker includes both executables.
+  These are separate programs, usually bundled together: `ffprobe` reads metadata/counts
+  frames; `ffmpeg` extracts frames/converts images. Keep both in the same directory;
+  configure only FFmpeg, and the bot locates ffprobe automatically. Enable explicitly with
+  `ai.content_moderation.ffmpeg_enabled: true` (default: `false`). The path defaults to
+  `/usr/bin/ffmpeg`, matching Docker; override `ai.content_moderation.ffmpeg_path` for your
+  host. An empty/unset path uses the default; use the boolean to disable checks.
+  Photo analysis does not require FFmpeg.
 
 > **Tip - finding chat IDs:** add the bot to your chat, send a message, and enable
 > `debug.debug_telegram: true` to see chat and topic IDs in the logs. Group/supergroup IDs are
@@ -241,6 +250,11 @@ admin:
 > logs and the system page are not served there. The link is built from `web_ui.public_url`; in
 > webhook mode it falls back to the host of `webhook.url`, so you usually don't need to set it.
 > If no public URL can be resolved, the button is hidden and moderator login stays disabled.
+
+`web_ui.public_url` holds only the scheme and host. Both path prefixes are full URL
+paths, so to serve everything behind a single reverse-proxy rule such as `/admin2/`,
+nest the moderator prefix: `path_prefix: "/admin2"`, `moderator_path_prefix: "/admin2/mod"`.
+Restart after changes. See [Web UI configuration](config.md) for a complete example.
 
 **2. Requirements:**
 

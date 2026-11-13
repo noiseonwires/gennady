@@ -44,6 +44,9 @@ func (c *Config) Validate() error {
 	if c.Webhook.Enabled && c.Webhook.URL == "" {
 		errs = append(errs, fmt.Errorf("webhook.url is required when webhook is enabled"))
 	}
+	if err := c.WebUI.ValidatePublicURL(); err != nil {
+		errs = append(errs, err)
+	}
 	if err := c.NormalizeChatTopicLists(); err != nil {
 		errs = append(errs, err)
 	}
@@ -70,6 +73,9 @@ func (c *Config) validateBackup() error {
 		return nil
 	}
 	var errs []error
+	if err := c.Backup.ValidateEncryption(); err != nil {
+		errs = append(errs, err)
+	}
 	switch strings.ToLower(strings.TrimSpace(c.Backup.Target)) {
 	case "", "local":
 		if strings.TrimSpace(c.Backup.LocalPath) == "" {
@@ -90,6 +96,14 @@ func (c *Config) validateBackup() error {
 		errs = append(errs, fmt.Errorf("backup.target %q is not supported (use local, webdav or bunny)", c.Backup.Target))
 	}
 	return errors.Join(errs...)
+}
+
+// ValidateEncryption also applies to manual backups when scheduling is disabled.
+func (c BackupConfig) ValidateEncryption() error {
+	if c.Encrypt && strings.TrimSpace(c.EncryptionPassword) == "" {
+		return fmt.Errorf("backup.encryption_password is required when backup.encrypt is enabled")
+	}
+	return nil
 }
 
 // validateNightMode checks the night-mode window when the feature is enabled.

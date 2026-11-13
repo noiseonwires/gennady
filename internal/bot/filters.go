@@ -262,9 +262,9 @@ func (b *Bot) moderateMessage(mc *MsgContext, messageText string) bool {
 	skipAdmin := b.config.AI.ContentModeration.SkipAdminUsers && b.isUserAdmin(message.From.ID)
 	if message.From != nil && !skipAdmin && !b.isUserWhitelisted(message.From.ID) {
 		// Check for bad words using the processed text (including image analysis).
-		matchedRules, isContentFilter, decisionDetails := b.containsBadWords(messageLower, message, messageText)
+		matchedRules, isContentFilter, decisionDetails, verdicts := b.containsBadWords(messageLower, message, messageText)
 		if len(matchedRules) > 0 {
-			b.handleBadWordDetected(message, messageText, isContentFilter, matchedRules, decisionDetails)
+			b.handleBadWordDetected(message, messageText, isContentFilter, matchedRules, decisionDetails, verdicts)
 			return true // moderated - don't check other filters
 		}
 	}
@@ -331,15 +331,15 @@ func (b *Bot) buildModerationReplyContext(message *tgbotapi.Message) string {
 // This is the imperative shell: it performs the AI calls, reactions, stats and
 // placeholder writes, deferring every branch decision to the pure functions in
 // classifier.go (decideConfirmedVerdict / decideDoubleCheckVerdict).
-func (b *Bot) containsBadWords(messageText string, message *tgbotapi.Message, fullMessageText string) ([]config.ModerationRule, bool, string) {
+func (b *Bot) containsBadWords(messageText string, message *tgbotapi.Message, fullMessageText string) ([]config.ModerationRule, bool, string, moderationVerdicts) {
 	if !b.config.AI.ContentModeration.Enabled || message == nil || !b.config.IsModerationChat(message.Chat.ID) {
-		return nil, false, ""
+		return nil, false, "", moderationVerdicts{}
 	}
 	// Defense-in-depth: the sole caller (analyzeMessage) already returns early
 	// for excluded (chat, topic) pairs, but re-check so this never moderates an
 	// excluded scope regardless of caller.
 	if !b.config.IsModerationActive(message.Chat.ID, messageTopic(message)) {
-		return nil, false, ""
+		return nil, false, "", moderationVerdicts{}
 	}
 
 	replyToText := b.buildModerationReplyContext(message)
@@ -347,6 +347,10 @@ func (b *Bot) containsBadWords(messageText string, message *tgbotapi.Message, fu
 	// Stage 1: light model.
 	lightRules, lightDetails, lightErr := b.analyzeMessageContentWithLightModel(fullMessageText, message.From.ID, message.Chat.ID, replyToText)
 	light := newModelOutcome(lightRules, lightDetails, lightErr)
+	verdicts := moderationVerdicts{Light: formatModelVerdict(light)}
+	if light.contentFilter {
+		verdicts.ContentFilterDetails = warningContentFilterDetails(light.cfDetails)
+	}
 	switch {
 	case light.contentFilter:
 		log.Printf("⚠️ Content filter triggered by light model for message %d - will confirm with full model", message.MessageID)
@@ -365,6 +369,10 @@ func (b *Bot) containsBadWords(messageText string, message *tgbotapi.Message, fu
 		// Stage 2: full-model confirmation.
 		fullRules, fullDetails, fullErr := b.analyzeMessageContentWithFullModel(fullMessageText, message.From.ID, message.Chat.ID, replyToText)
 		full := newModelOutcome(fullRules, fullDetails, fullErr)
+		verdicts.Full = formatModelVerdict(full)
+		if full.contentFilter {
+			verdicts.ContentFilterDetails = warningContentFilterDetails(full.cfDetails)
+		}
 		switch {
 		case full.contentFilter:
 			log.Printf("⚠️ Content filter triggered by full model for message %d", message.MessageID)
@@ -373,7 +381,8 @@ func (b *Bot) containsBadWords(messageText string, message *tgbotapi.Message, fu
 		case len(full.rules) > 0:
 			log.Printf("✅ Full model confirmed bad content in message %d (%d rule(s))", message.MessageID, len(full.rules))
 		}
-		return b.applyVerdictDecision(message, decideConfirmedVerdict(light, full))
+		rules, isContentFilter, details := b.applyVerdictDecision(message, decideConfirmedVerdict(light, full))
+		return rules, isContentFilter, details, verdicts
 	}
 
 	// New-user double-check: the light model cleared the message, but for a
@@ -383,6 +392,10 @@ func (b *Bot) containsBadWords(messageText string, message *tgbotapi.Message, fu
 		log.Printf("🔁 Light model cleared message %d but user is within first %d message(s) - double-checking with full model", message.MessageID, b.config.AI.ContentModeration.FullModelFirstMessages)
 		fullRules, fullDetails, fullErr := b.analyzeMessageContentWithFullModel(fullMessageText, message.From.ID, message.Chat.ID, replyToText)
 		full := newModelOutcome(fullRules, fullDetails, fullErr)
+		verdicts.Full = formatModelVerdict(full)
+		if full.contentFilter {
+			verdicts.ContentFilterDetails = warningContentFilterDetails(full.cfDetails)
+		}
 		switch {
 		case full.contentFilter:
 			log.Printf("⚠️ Content filter triggered by full model on new-user double-check for message %d", message.MessageID)
@@ -393,10 +406,11 @@ func (b *Bot) containsBadWords(messageText string, message *tgbotapi.Message, fu
 		default:
 			log.Printf("❌ Full model also cleared message %d on new-user double-check", message.MessageID)
 		}
-		return b.applyVerdictDecision(message, decideDoubleCheckVerdict(full))
+		rules, isContentFilter, details := b.applyVerdictDecision(message, decideDoubleCheckVerdict(full))
+		return rules, isContentFilter, details, verdicts
 	}
 
-	return nil, false, ""
+	return nil, false, "", verdicts
 }
 
 // applyVerdictDecision materialises the terminal side effect of a pure
@@ -421,7 +435,7 @@ func (b *Bot) applyVerdictDecision(message *tgbotapi.Message, d verdictDecision)
 		if d.cfDetails != "" {
 			csDetails += "\n" + d.cfDetails
 		}
-		b.replaceMessageContentWithPlaceholder(message.MessageID, message.Chat.ID, "[The message was not saved, because it violated AI content policies.]", csDetails)
+		b.replaceMessageContentWithPlaceholder(message.MessageID, message.Chat.ID, contentPolicyPlaceholder, csDetails)
 		return d.rules, d.isCF, d.details
 	default: // effectNone
 		return d.rules, d.isCF, d.details
@@ -486,7 +500,7 @@ func (b *Bot) clearMessageReaction(chatID int64, messageID int) {
 // matched rule's action is dispatched in turn so that combinations like
 // "warn + report" or "delete + ban" can be expressed by stacking rules.
 // decisionDetails is explanatory text from the LLM (lines after the trigger line).
-func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText string, isContentFilter bool, matchedRules []config.ModerationRule, decisionDetails string) {
+func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText string, isContentFilter bool, matchedRules []config.ModerationRule, decisionDetails string, modelVerdicts ...moderationVerdicts) {
 	userID := int64(0)
 	if message.From != nil {
 		userID = message.From.ID
@@ -526,13 +540,28 @@ func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText strin
 		log.Printf("AI decision details for message %d: %s", message.MessageID, decisionDetails)
 	}
 
-	// Persist the AI moderation verdict's explanation onto the offending message
-	// so the Web UI (chat messages list + moderation events list) can show *why*
-	// it was actioned. Recorded once here - regardless of how many actions the
-	// verdict triggers below - since the reason describes the message itself, not
-	// any individual action. No-op when the message isn't tracked in message_info.
-	if decisionDetails != "" {
-		if err := b.db.UpdateMessageModerationReason(message.MessageID, message.Chat.ID, decisionDetails); err != nil {
+	var verdicts moderationVerdicts
+	if len(modelVerdicts) > 0 {
+		verdicts = modelVerdicts[0]
+	}
+	if len(matchedRules) > 0 || decisionDetails != "" || isContentFilter {
+		verdicts.Decision = formatModelVerdict(modelOutcome{
+			rules: matchedRules, details: decisionDetails,
+			contentFilter: isContentFilter && len(matchedRules) == 0, cfDetails: decisionDetails,
+		})
+	}
+	if isContentFilter && verdicts.ContentFilterDetails == "" {
+		verdicts.ContentFilterDetails = warningContentFilterDetails(decisionDetails)
+	}
+
+	// Keep label-only verdicts too, so later manual warnings still know why the
+	// message was flagged when the model did not include an explanation.
+	storedReason := decisionDetails
+	if storedReason == "" {
+		storedReason = verdicts.Decision
+	}
+	if storedReason != "" {
+		if err := b.db.UpdateMessageModerationReason(message.MessageID, message.Chat.ID, storedReason); err != nil {
 			log.Printf("Error storing moderation reason for message %d: %v", message.MessageID, err)
 		}
 	}
@@ -605,7 +634,7 @@ func (b *Bot) handleBadWordDetected(message *tgbotapi.Message, messageText strin
 		case config.ModerationActionDelete:
 			b.autoModerateDelete(message, messageText, isContentFilter, step.rule, adminNotificationAllowed)
 		case config.ModerationActionWarn:
-			b.autoModerateWarn(message, messageText, step.rule, adminNotificationAllowed)
+			b.autoModerateWarn(message, messageText, step.rule, adminNotificationAllowed, verdicts)
 		case config.ModerationActionMute:
 			b.autoModerateMute(message, messageText, step.rule, adminNotificationAllowed)
 		default: // report (or unknown → safest behavior)

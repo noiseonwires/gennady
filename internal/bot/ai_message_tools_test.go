@@ -126,6 +126,7 @@ func TestCallResponsesWithMessageTools_FunctionLoop(t *testing.T) {
 		}`))
 	})
 	storeMessageToolTestMessage(t, b, 10, -100, 7, "alice", "tool result text", 42, time.Date(2026, 9, 9, 10, 0, 0, 0, time.UTC))
+	b.config.AI.CreativeReplies.MessageToolsEnabled = true
 	model := fullModelConfig()
 
 	result, err := b.callResponsesWithMessageTools(

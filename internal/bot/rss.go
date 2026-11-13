@@ -24,10 +24,12 @@ type rssFeed struct {
 }
 
 type rssChannel struct {
-	Title       string    `xml:"title"`
-	Description string    `xml:"description"`
-	Link        string    `xml:"link"`
-	Items       []rssItem `xml:"item"`
+	Title         string    `xml:"title"`
+	Description   string    `xml:"description"`
+	Link          string    `xml:"link"`
+	PubDate       string    `xml:"pubDate"`
+	LastBuildDate string    `xml:"lastBuildDate"`
+	Items         []rssItem `xml:"item"`
 }
 
 type rssItem struct {
@@ -119,19 +121,7 @@ func (b *Bot) processRssFeed(feed config.RssFeed) {
 	cutoff := event.LastFiredAt
 	log.Printf("📰 RssUpdates: publishing items from %q newer than %s", feed.Name, cutoff.Format(time.RFC3339))
 
-	// Filter items whose pubDate is after the cutoff
-	var newItems []rssItem
-	for _, item := range items {
-		pubTime, ok := parseRSSDate(item.PubDate)
-		if !ok {
-			log.Printf("📰 RssUpdates: skipping item %q - unparseable pubDate %q", item.Title, item.PubDate)
-			continue
-		}
-		if pubTime.After(cutoff) {
-			newItems = append(newItems, item)
-		}
-	}
-
+	newItems := filterRSSItems(feed.Name, items, cutoff)
 	if len(newItems) == 0 {
 		log.Printf("📰 RssUpdates: no new items in %q", feed.Name)
 		return
@@ -147,6 +137,33 @@ func (b *Bot) processRssFeed(feed config.RssFeed) {
 			time.Sleep(5 * time.Second)
 		}
 	}
+}
+
+func filterRSSItems(feedName string, items []rssItem, cutoff time.Time) []rssItem {
+	var newItems []rssItem
+	var oldest, newest time.Time
+	var older, invalid int
+	for _, item := range items {
+		published, ok := parseRSSDate(item.PubDate)
+		if !ok {
+			invalid++
+			log.Printf("RSS: feed %q skipping item %q - unparseable pubDate %q", feedName, item.Title, item.PubDate)
+			continue
+		}
+		if oldest.IsZero() || published.Before(oldest) {
+			oldest = published
+		}
+		if newest.IsZero() || published.After(newest) {
+			newest = published
+		}
+		if published.After(cutoff) {
+			newItems = append(newItems, item)
+		} else {
+			older++
+		}
+	}
+	log.Printf("RSS: feed %q selection: total=%d newer=%d at_or_before_cutoff=%d invalid_dates=%d oldest=%s newest=%s cutoff=%s", feedName, len(items), len(newItems), older, invalid, oldest.Format(time.RFC3339), newest.Format(time.RFC3339), cutoff.Format(time.RFC3339))
+	return newItems
 }
 
 // translateAndPublishRssItem translates a single RSS item and publishes it to moderation chats
@@ -331,6 +348,8 @@ func (b *Bot) fetchRSSFeed(feedName, feedURL string) ([]rssItem, error) {
 	if err := xml.Unmarshal(res.Body, &feed); err != nil {
 		return nil, fmt.Errorf("XML parse error: %w", err)
 	}
+
+	log.Printf("RSS: feed %q response: sha256=%x bytes=%d date=%q last_modified=%q etag=%q age=%q cdn_cache=%q cdn_cached_at=%q pubDate=%q lastBuildDate=%q", feedName, sha256.Sum256(res.Body), len(res.Body), res.Header.Get("Date"), res.Header.Get("Last-Modified"), res.Header.Get("ETag"), res.Header.Get("Age"), res.Header.Get("CDN-Cache"), res.Header.Get("CDN-CachedAt"), feed.Channel.PubDate, feed.Channel.LastBuildDate)
 
 	return feed.Channel.Items, nil
 }

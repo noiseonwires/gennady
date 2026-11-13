@@ -14,6 +14,7 @@ package tgadapter
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -160,7 +161,15 @@ func (a *Adapter) SendMessage(p telegram.SendMessageParams) (telegram.Message, e
 	if err != nil {
 		return telegram.Message{}, wrapErr(err)
 	}
-	return toSentMessage(sent), nil
+	result := toSentMessage(sent)
+	if p.RequireReplyTarget && p.ReplyToMessageID != 0 && result.ReplyToMessageID != p.ReplyToMessageID {
+		if deleteErr := a.DeleteMessage(p.ChatID, result.MessageID); deleteErr != nil {
+			return telegram.Message{}, fmt.Errorf("%w; failed to delete orphan message %d: %v",
+				telegram.ErrReplyTargetMissing, result.MessageID, deleteErr)
+		}
+		return telegram.Message{}, telegram.ErrReplyTargetMissing
+	}
+	return result, nil
 }
 
 // EditMessageText implements telegram.Client.

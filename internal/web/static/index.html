@@ -24,8 +24,8 @@
     <script defer src="js/page-config.js"></script>
     <script defer src="js/page-config-editors.js"></script>
     <script defer src="js/page-logs-system.js"></script>
-        <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.17.2/dist/cdn.min.js"
-            onerror="var s=document.createElement('script');s.defer=true;s.src='https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.17.2/cdn.min.js';document.head.appendChild(s)"></script>
+        <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.17.5/dist/cdn.min.js"
+            onerror="var s=document.createElement('script');s.defer=true;s.src='https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.17.5/cdn.min.js';document.head.appendChild(s)"></script>
 </head>
 <body x-data x-cloak>
 
@@ -1556,10 +1556,10 @@
                                                 <div>
                                                     <label>
                                                         <span x-text="fieldLabel(f)"></span>
-                                                        <span class="reveal-btn" @click="revealed[f.key] = !revealed[f.key]">👁</span>
+                                                        <span class="reveal-btn" @click="toggleSecret(f.key)">👁</span>
                                                     </label>
                                                     <div class="desc" x-text="fieldDesc(f)"></div>
-                                                    <input :type="revealed[f.key] ? 'text' : 'password'" x-model="values[f.key]" :disabled="$store.app.envOverrides.has(f.key)">
+                                                    <input :type="revealed[f.key] ? 'text' : 'password'" x-model="values[f.key]" :disabled="$store.app.envOverrides.has(f.key) || !!revealing[f.key]">
                                                 </div>
                                             </template>
                                             <!-- Chat + Topic list (forum-aware) -->

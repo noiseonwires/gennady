@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEffectivePublicURL(t *testing.T) {
@@ -21,6 +22,21 @@ func TestEffectivePublicURL(t *testing.T) {
 	// Explicit public_url takes precedence; trailing slash is trimmed.
 	b.config.WebUI.PublicURL = "https://panel.example.com/"
 	assert.Equal(t, "https://panel.example.com", b.effectivePublicURL())
+}
+
+func TestHandleAdminModWebUI_NestedModeratorPrefix(t *testing.T) {
+	b, tg := adminBot(t)
+	b.config.WebUI.PublicURL = " https://panel.example.com/ "
+	b.config.WebUI.PathPrefix = "/admin2"
+	b.config.WebUI.ModeratorPathPrefix = "/admin2/modentry/"
+	b.generateModeratorLogin = func(int64, string) (string, string) { return "test-token", "123456" }
+
+	b.handleAdminModWebUI(testCallbackQuery(1, -100, 55, "admin_mod_web"))
+
+	require.Len(t, tg.SentMessages, 2)
+	assert.Contains(t, tg.SentMessages[0].Text, "https://panel.example.com/admin2/modentry/#t=test-token")
+	assert.Equal(t, int64(1), tg.SentMessages[0].ChatID)
+	assert.Equal(t, int64(1), tg.SentMessages[1].ChatID)
 }
 
 func TestModeratorWebLoginAvailable(t *testing.T) {

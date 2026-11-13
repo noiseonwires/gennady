@@ -161,20 +161,24 @@ func (b *Bot) stagePrepareDeletion(mc *MsgContext) Direction {
 // pairs back in so their history keeps the OCR text. It also keeps that history
 // enrichment for whitelisted senders, while the Content-Safety image route and
 // text moderation stay moderation-only.
+// Creative-reply triggers also need image context in moderation-excluded topics.
 func (b *Bot) stageEnhance(mc *MsgContext) Direction {
 	enhancedText := mc.Msg.TextWithEntityLinks()
 
-	historyNeedsImageAnalysis := b.config.AI.DailySummary.Enabled || b.config.AI.ContentModeration.VisionOutsideModeration
+	creativeNeedsImageAnalysis := !mc.IsEdited && b.config.AI.CreativeReplies.Enabled && mc.Scope.Creative &&
+		(b.isBotMentioned(mc.Msg) || (mc.Msg.ReplyToMessage != nil && mc.Msg.ReplyToMessage.From != nil &&
+			mc.Msg.ReplyToMessage.From.ID == b.botSelf.ID))
+	historyNeedsImageAnalysis := b.config.AI.DailySummary.Enabled || b.config.AI.ContentModeration.VisionOutsideModeration || creativeNeedsImageAnalysis
 	skipImageAnalysis := mc.Scope.Whitelisted && !historyNeedsImageAnalysis
 	imageAnalysisScope := mc.Scope.Moderate ||
-		(mc.Scope.InModerationChat && b.config.AI.ContentModeration.VisionOutsideModeration)
+		(mc.Scope.InModerationChat && (b.config.AI.ContentModeration.VisionOutsideModeration || creativeNeedsImageAnalysis))
 	imageAnalysisEnabled := b.config.AI.ContentModeration.AIImageAnalysisEnabled ||
 		b.config.AI.ContentModeration.VisionEnabled ||
 		b.config.AI.ContentModeration.OCRSpaceEnabled
 	if imageAnalysisScope && b.config.AI.Enabled && !skipImageAnalysis && imageAnalysisEnabled {
 		var flagged bool
 		enhancedText, flagged = b.processMessageEnhancements(mc.Msg)
-		mc.Flagged = flagged && mc.Scope.Moderate
+		mc.Flagged = flagged && mc.Scope.Moderate && !mc.Scope.Whitelisted
 	}
 
 	mc.Enhanced = enhancedText
@@ -196,7 +200,7 @@ func (b *Bot) stageModerate(mc *MsgContext) Direction {
 		csRules := b.matchContentSecurityRules()
 		if len(csRules) > 0 {
 			csDetails := i18n.T("mod.content_security_details")
-			b.handleBadWordDetected(mc.EnhancedMsg, mc.Enhanced, true, csRules, csDetails)
+			b.handleBadWordDetected(mc.EnhancedMsg, mc.Enhanced, true, csRules, csDetails, moderationVerdicts{Full: csDetails})
 			mc.Moderated = true
 		} else {
 			log.Printf("⚠️ Content Safety flagged message %d but no content-security rules configured, skipping", mc.Msg.MessageID)
@@ -284,8 +288,9 @@ func (b *Bot) features() []feature {
 func (b *Bot) runMessageSummary(mc *MsgContext) {
 	isExcludedFromSummary := !mc.Scope.Summarize
 	isExcludedUser := mc.Msg.From != nil && b.isMessageSummaryExcludedUser(mc.Msg.From.ID)
-	if !mc.IsEdited && utf8.RuneCountInString(mc.Enhanced) > b.config.AI.MessageSummaries.MinLength && !isExcludedFromSummary && !isExcludedUser {
-		b.generateMessageSummary(mc.EnhancedMsg)
+	originalText := mc.Msg.TextWithEntityLinks()
+	if !mc.IsEdited && utf8.RuneCountInString(originalText) > b.config.AI.MessageSummaries.MinLength && !isExcludedFromSummary && !isExcludedUser {
+		b.generateMessageSummary(mc.EnhancedMsg, originalText)
 	} else if isExcludedFromSummary {
 		log.Printf("Skipping AI summary for message %d - (chat, topic) excluded from summaries", mc.Msg.MessageID)
 	} else if isExcludedUser {

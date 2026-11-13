@@ -4,6 +4,43 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-13
+
+### Added
+
+- Opt-in compressed AES-256 ZIP backups for local, WebDAV and Bunny destinations.
+  Keep the password separately; existing plaintext backups are not removed.
+- Opt-in sticker and animation analysis with FFmpeg, plus persistent caching of
+  successful image analyses to avoid repeated API calls.
+- An optional creative-reply tool to look up a user's chat reputation and AI
+  profile, independently of message-history tools.
+- An optional creative-reply rate-limit exemption for administrators, whose
+  replies are also excluded from the shared limit.
+- Warning prompt placeholders for the message and moderation verdicts, and an
+  option to generate warnings with the light model.
+
+### Changed
+
+- The Docker image includes FFmpeg and ffprobe and uses a writable `/app` for
+  relative backup paths; it continues to run as an unprivileged user.
+- Creative replies can include image analysis for mentions and replies from
+  whitelisted users or in topics excluded from moderation.
+- RSS logging now includes feed response and item-selection diagnostics.
+
+### Fixed
+
+- `web_ui.public_url` now accepts only scheme and host; both web UI prefixes
+  are full paths and can be nested (e.g. `/admin2` and `/admin2/mod`) behind a
+  single reverse-proxy rule. Move any existing URL path into the appropriate
+  prefix. The moderator UI stays limited even with a super-admin session.
+- Web UI secret fields now reveal their actual values on demand instead of the
+  redaction placeholder; unchanged masked values remain preserved when saving.
+- Message summaries now ignore appended image-analysis text when checking length,
+  creative-reply history remains isolated by chat, and AI warning prompts can
+  use the light/full moderation verdicts.
+- Improved database schema upgrades, moderation links, and replies to deleted
+  messages.
+
 ## [1.3.0] - 2026-09-25
 
 ### Added
@@ -77,6 +114,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Bot mentions/replies aimed at the bot's own messages now get a creative reply
   instead of the moderation path; caption mentions are detected.
 
+[1.4.0]: https://github.com/noiseonwires/gennady/releases/tag/v1.4.0
 [1.3.0]: https://github.com/noiseonwires/gennady/releases/tag/v1.3.0
 [1.2.0]: https://github.com/noiseonwires/gennady/releases/tag/v1.2.0
 [1.1.0]: https://github.com/noiseonwires/gennady/releases/tag/v1.1.0

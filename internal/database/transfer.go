@@ -33,6 +33,7 @@ var transferTableNames = []string{
 	"forum_topics",
 	"moderation_stats",
 	"website_snapshots",
+	"media_analysis_cache",
 }
 
 // transferExcludedTables lists tables that are intentionally NOT copied during
@@ -94,7 +95,7 @@ const (
 // tableImportStrategy returns the import strategy for each table.
 func tableImportStrategy(table string) importStrategy {
 	switch table {
-	case "message_info", "messages_for_deletion":
+	case "message_info", "messages_for_deletion", "media_analysis_cache":
 		return importMerge
 	case "actions":
 		return importMergeActions
@@ -174,6 +175,7 @@ func (db *DB) ExportToLocalFile(dir string, includeConfig bool) (string, error) 
 // ImportFromLocalFile reads a local SQLite file and merges its data into the
 // current database (local or remote). The merge strategy is table-specific:
 //   - message_info, messages_for_deletion: add missing rows, keep existing (INSERT OR IGNORE)
+//   - media_analysis_cache: merge content/settings hashes without discarding existing entries
 //   - actions, warnings: add missing rows, skip duplicates by natural key
 //   - scheduled_events: keep the most recent last_fired_at from either source
 //   - user_profiles: keep the row with the most recent updated_at from either source

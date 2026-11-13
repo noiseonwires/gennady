@@ -118,6 +118,9 @@ func setDefaults(config *Config) {
 		config.ScheduledEvents.LockTimeoutMinutes = 15
 	}
 	// AI feature defaults
+	if strings.TrimSpace(config.AI.ContentModeration.FFmpegPath) == "" {
+		config.AI.ContentModeration.FFmpegPath = "/usr/bin/ffmpeg"
+	}
 	if config.AI.MorningGreeting.Time == "" {
 		config.AI.MorningGreeting.Time = "08:00"
 	}
@@ -236,6 +239,10 @@ func setDefaults(config *Config) {
 	if config.AI.ContentModeration.ComplaintManualModeration == nil {
 		defaultTrue := true
 		config.AI.ContentModeration.ComplaintManualModeration = &defaultTrue
+	}
+	if config.AI.ContentModeration.WarningUseFullModel == nil {
+		defaultTrue := true
+		config.AI.ContentModeration.WarningUseFullModel = &defaultTrue
 	}
 	// New-user profile screening prompt falls back to a built-in default that
 	// asks the model to flag promotional / scam / NSFW signals across a new

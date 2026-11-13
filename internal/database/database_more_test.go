@@ -589,6 +589,13 @@ func TestBotMessageQueries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 
+	storeMsg(t, db, 101, -1, 999, "bot", "admin reply", now)
+	require.NoError(t, db.MarkMessageRateLimitExempt(101, -1))
+	storeMsg(t, db, 101, -1, 999, "bot", "admin reply edited", now)
+	count, err = db.GetRecentBotMessageCount(999, -1, 24)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "exempt messages are not counted, even after a re-store")
+
 	// No bot messages -> 0, error.
 	_, err = db.GetLatestBotMessageID(123, -1)
 	require.Error(t, err)

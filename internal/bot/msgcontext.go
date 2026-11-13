@@ -62,8 +62,9 @@ type MsgContext struct {
 	Scope    Scope
 
 	// Enhanced is the message text after the enhancement stage: the raw text
-	// (or caption), optionally enriched with AI/vision/OCR analysis. It is the text
-	// fed to moderation, summaries and length checks.
+	// (or caption), optionally enriched with AI/vision/OCR analysis. It is fed to
+	// moderation and summary prompts, but summary eligibility is based on Msg's
+	// original user-authored text.
 	Enhanced string
 	// EnhancedMsg is a shallow copy of Msg whose Text is Enhanced. Downstream
 	// stages pass it (instead of Msg) so recording/moderation/summaries see the

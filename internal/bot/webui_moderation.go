@@ -291,7 +291,10 @@ func (b *Bot) WebWarnUser(userID, chatID int64, messageID int, adminID int64, ad
 		return fmt.Errorf("warning already exists for this message")
 	}
 
-	_, _, messageText, _ := b.getUserInfoFromMessage(chatID, messageID)
+	messageInfo, err := b.db.GetMessageInfo(messageID, chatID)
+	if err != nil {
+		return fmt.Errorf("get message topic: %w", err)
+	}
 
 	warning := &database.Warning{
 		UserID:    ctx.userID,
@@ -322,20 +325,18 @@ func (b *Bot) WebWarnUser(userID, chatID int64, messageID int, adminID int64, ad
 	}
 
 	displayName := b.getUserDisplayName(userID)
-	warningText, werr := b.generateWarningNotification(displayName, messageText, muteInfoText, userID, ctx.chatID)
+	warningText, werr := b.generateWarningNotification(displayName, messageInfo.Text, muteInfoText, userID, ctx.chatID, warningVerdictsFromMessage(messageInfo))
 	if werr != nil {
-		if strings.Contains(werr.Error(), "content_filter") && messageText != "" {
-			warningText, werr = b.generateWarningNotification(displayName, "", muteInfoText, userID, ctx.chatID)
-		}
-		if werr != nil {
-			warningText = i18n.T("warn.fallback")
-		}
+		log.Printf("Web moderation (warn): error generating AI warning: %v", werr)
+		warningText = i18n.T("warn.fallback")
 	}
 
 	sent, err := b.tg.SendMessage(telegram.SendMessageParams{
-		ChatID:           chatID,
-		Text:             warningText,
-		ReplyToMessageID: messageID,
+		ChatID:             chatID,
+		Text:               warningText,
+		ReplyToMessageID:   messageID,
+		RequireReplyTarget: true,
+		MessageThreadID:    messageInfo.MessageThreadID,
 	})
 	if err != nil {
 		log.Printf("WebUI: error sending warning message: %v", err)

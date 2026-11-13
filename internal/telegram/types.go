@@ -16,7 +16,15 @@
 // logic changes.
 package telegram
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrReplyTargetMissing means Telegram accepted a reply request but returned a
+// standalone message. The adapter deletes that orphan before returning this
+// error when RequireReplyTarget is set.
+var ErrReplyTargetMissing = errors.New("reply target no longer exists")
 
 // APIError is a neutral, structured Telegram API error. Adapters convert their
 // library-specific error type into this so business logic can inspect the HTTP
@@ -270,6 +278,9 @@ type SendMessageParams struct {
 	Text             string
 	ParseMode        ParseMode
 	ReplyToMessageID int
+	// RequireReplyTarget deletes the sent message and returns
+	// ErrReplyTargetMissing if Telegram did not attach it to ReplyToMessageID.
+	RequireReplyTarget bool
 	// MessageThreadID targets a forum topic (0 = the chat's main area). Use this
 	// to post into a topic; do not abuse ReplyToMessageID for topic targeting.
 	MessageThreadID       int

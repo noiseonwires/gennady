@@ -35,12 +35,16 @@ func TestMessageSummary_LongMessage_PostsTLDRAndQueuesDeletion(t *testing.T) {
 	})
 	summaryConfig(b)
 
-	b.generateMessageSummary(testMessage(-100, 7, 55, strings.Repeat("a", 50)))
+	message := testMessage(-100, 7, 55, strings.Repeat("a", 50))
+	message.Chat.IsForum = true
+	message.MessageThreadID = 42
+	b.generateMessageSummary(message)
 
 	require.Len(t, tg.SentMessages, 1, "a long message must get a summary reply")
 	assert.Contains(t, tg.SentMessages[0].Text, "TL;DR")
 	assert.Contains(t, tg.SentMessages[0].Text, "short version")
 	assert.Equal(t, 55, tg.SentMessages[0].ReplyToMessageID)
+	assert.Equal(t, 42, tg.SentMessages[0].MessageThreadID)
 
 	// The summary reply (mock message id 1) is queued for deletion.
 	inQueue, err := b.db.IsMessageInDeletionQueue(1, -100)
@@ -59,6 +63,24 @@ func TestMessageSummary_ShortMessage_NoSummary(t *testing.T) {
 
 	assert.Empty(t, tg.SentMessages)
 	assert.Equal(t, 0, rt.count(), "a short message must not reach the summary model")
+}
+
+func TestMessageSummary_ImageAnalysisDoesNotCountTowardMinimumLength(t *testing.T) {
+	b, tg, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"x"}}]}`))
+	})
+	summaryConfig(b)
+	message := testMessage(-100, 7, 55, "short caption")
+	mc := b.newInboundContext(message, false)
+	mc.Enhanced = message.Text + "\n" + strings.Repeat("image analysis ", 20)
+	enhanced := *message
+	enhanced.Text = mc.Enhanced
+	mc.EnhancedMsg = &enhanced
+
+	b.runMessageSummary(mc)
+
+	assert.Empty(t, tg.SentMessages)
+	assert.Equal(t, 0, rt.count(), "AI image analysis must not make a short message eligible for summarization")
 }
 
 // A (chat, topic) excluded from summaries is not summarized even when long.

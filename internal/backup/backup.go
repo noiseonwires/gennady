@@ -9,10 +9,9 @@
 //     database that is a WAL-checkpointed copy of the live file; for a remote
 //     database it is a full export (the same code path the web UI uses for
 //     "download DB").
-//  2. Upload - hand the file to a Target (local folder, WebDAV, or a bunny.net
+//  2. Optionally compress and encrypt the snapshot as an AES-256 ZIP archive.
+//  3. Upload - hand the file to a Target (local folder, WebDAV, or a bunny.net
 //     Edge Storage zone), replacing the previous backup with the same name.
-//
-// Everything is built on the standard library; no extra dependencies.
 package backup
 
 import (
@@ -48,6 +47,9 @@ type Result struct {
 // Run performs one complete backup cycle. dbPath is the local SQLite path from
 // the database config; it is only used when the active database is local.
 func Run(ctx context.Context, src Source, cfg config.BackupConfig, dbPath string) (Result, error) {
+	if err := cfg.ValidateEncryption(); err != nil {
+		return Result{}, err
+	}
 	tmpDir, err := resolveTempDir(cfg, dbPath)
 	if err != nil {
 		return Result{}, err
@@ -66,13 +68,22 @@ func Run(ctx context.Context, src Source, cfg config.BackupConfig, dbPath string
 	// or not, so a remote destination leaves nothing behind on this machine.
 	defer os.Remove(snapPath)
 
-	info, err := os.Stat(snapPath)
+	uploadPath := snapPath
+	if cfg.Encrypt {
+		uploadPath, err = encryptedArchive(ctx, snapPath, SanitizeName(cfg.FilePrefix)+DefaultBaseName, cfg.EncryptionPassword)
+		if err != nil {
+			return Result{}, fmt.Errorf("failed to encrypt backup: %w", err)
+		}
+		defer os.Remove(uploadPath)
+	}
+
+	info, err := os.Stat(uploadPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("failed to stat backup file: %w", err)
 	}
 
 	name := BaseName(cfg)
-	if err := target.Put(ctx, name, snapPath); err != nil {
+	if err := target.Put(ctx, name, uploadPath); err != nil {
 		return Result{}, fmt.Errorf("failed to upload backup to %s: %w", target.Describe(), err)
 	}
 
@@ -128,9 +139,13 @@ func ensureWritableDir(dir string) error {
 }
 
 // BaseName returns the destination file name for the current settings, i.e.
-// "<prefix>moderation.db".
+// "<prefix>moderation.db", with ".zip" appended when encryption is enabled.
 func BaseName(cfg config.BackupConfig) string {
-	return SanitizeName(cfg.FilePrefix) + DefaultBaseName
+	name := SanitizeName(cfg.FilePrefix) + DefaultBaseName
+	if cfg.Encrypt {
+		name += ".zip"
+	}
+	return name
 }
 
 // SanitizeName restricts a user-supplied file-name fragment to characters that

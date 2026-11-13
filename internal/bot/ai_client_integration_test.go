@@ -3,6 +3,7 @@
 package bot
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -143,6 +144,92 @@ func TestCallAzureOpenAI_HappyPathNoRetry(t *testing.T) {
 	assert.Equal(t, "ok", out)
 }
 
+func TestGenerateWarningNotificationModelSelection(t *testing.T) {
+	useFull, useLight := true, false
+	for _, tt := range []struct {
+		name     string
+		useFull  *bool
+		wantPath string
+	}{
+		{name: "omitted", wantPath: "/openai/deployments/warning-full/chat/completions"},
+		{name: "full", useFull: &useFull, wantPath: "/openai/deployments/warning-full/chat/completions"},
+		{name: "light", useFull: &useLight, wantPath: "/openai/deployments/warning-light/chat/completions"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"warning"}}]}`))
+			})
+			b.config.AI.Enabled = true
+			b.config.AI.FullModel = fullModelConfigs()
+			b.config.AI.FullModel.Configs[0].DeploymentName = "warning-full"
+			b.config.AI.LightModel = fullModelConfigs()
+			b.config.AI.LightModel.Configs[0].DeploymentName = "warning-light"
+			b.config.AI.ContentModeration.WarningUseFullModel = tt.useFull
+
+			out, err := b.generateWarningNotification("User", "message", "", 7, -100)
+			require.NoError(t, err)
+			assert.Equal(t, "warning", out)
+			require.Equal(t, 1, rt.count())
+			assert.Equal(t, tt.wantPath, rt.last().Path)
+
+			b.config.AI.Enabled = false
+			_, err = b.generateWarningNotification("User", "message", "", 7, -100)
+			require.ErrorContains(t, err, "not enabled")
+			assert.Equal(t, 1, rt.count(), "disabled AI must not contact either model")
+		})
+	}
+}
+
+func TestGenerateWarningNotificationLightModelFailover(t *testing.T) {
+	calls := 0
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			assert.Contains(t, r.URL.Path, "/deployments/light-primary/")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"temporary failure"}}`))
+			return
+		}
+		assert.Contains(t, r.URL.Path, "/deployments/light-fallback/")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"warning"}}]}`))
+	})
+	b.config.AI.Enabled = true
+	useFull := false
+	b.config.AI.ContentModeration.WarningUseFullModel = &useFull
+	primary, fallback := fullModelConfig(), fullModelConfig()
+	primary.DeploymentName = "light-primary"
+	fallback.DeploymentName = "light-fallback"
+	b.config.AI.LightModel = config.AIModelConfigs{Configs: []config.AIModelConfig{primary, fallback}}
+
+	out, err := b.generateWarningNotification("User", "message", "", 7, -100)
+	require.NoError(t, err)
+	assert.Equal(t, "warning", out)
+	assert.Equal(t, 2, rt.count())
+}
+
+func TestGenerateWarningNotificationLightModelUnavailable(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing", true: "disabled"}[disabled], func(t *testing.T) {
+			b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+				t.Error("warning generation must not fall back to the full model")
+			})
+			b.config.AI.Enabled = true
+			b.config.AI.FullModel = fullModelConfigs()
+			useFull := false
+			b.config.AI.ContentModeration.WarningUseFullModel = &useFull
+			if disabled {
+				b.config.AI.LightModel = fullModelConfigs()
+				b.config.AI.LightModel.Configs[0].Enabled = &useFull
+			}
+
+			out, err := b.generateWarningNotification("User", "message", "", 7, -100)
+			require.ErrorContains(t, err, "no enabled AI model endpoint")
+			assert.Empty(t, out)
+			assert.Zero(t, rt.count())
+		})
+	}
+}
+
 func TestGenerateWarningNotificationSupportsDualReputationPlaceholders(t *testing.T) {
 	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"warning"}}]}`))
@@ -151,14 +238,17 @@ func TestGenerateWarningNotificationSupportsDualReputationPlaceholders(t *testin
 	b.config.AI.FullModel = fullModelConfigs()
 	b.config.AI.UserProfiles.Enabled = true
 	b.config.AI.ContentModeration.WarningPrompt = config.PromptPair{
-		System: "PROFILE={{user_profile}}",
-		User:   "COMPACT={{user_reputation}} LEGACY={{reputation}} SCORE={{reputation_score}} GRADE={{reputation_grade}}",
+		System: "PROFILE={{user_profile}} LIGHT={{light_verdict}}",
+		User:   "COMPACT={{user_reputation}} LEGACY={{reputation}} SCORE={{reputation_score}} GRADE={{reputation_grade}} FULL={{full_verdict}}",
 	}
 	require.NoError(t, b.db.UpsertUserProfile(&database.UserProfile{
 		UserID: 42, Username: "mixed", Profile: "AI profile text", Reputation: "very_bad",
 	}))
 
-	out, err := b.generateWarningNotification("Mixed User", "message", "", 42, -100)
+	out, err := b.generateWarningNotification("Mixed User", "message", "", 42, -100, moderationVerdicts{
+		Light: "spam\nsuspicious links",
+		Full:  "spam\nconfirmed scam",
+	})
 	require.NoError(t, err)
 	assert.Equal(t, "warning", out)
 
@@ -167,6 +257,95 @@ func TestGenerateWarningNotificationSupportsDualReputationPlaceholders(t *testin
 	assert.Contains(t, body, "AI reputation: very_bad")
 	assert.Contains(t, body, "AI profile text")
 	assert.Contains(t, body, "LEGACY=neutral SCORE=0.0 GRADE=neutral")
+	assert.Contains(t, body, `LIGHT=spam\nsuspicious links`)
+	assert.Contains(t, body, `FULL=spam\nconfirmed scam`)
 	assert.NotContains(t, body, "{{user_profile}}")
 	assert.NotContains(t, body, "{{user_reputation}}")
+}
+
+func TestGenerateWarningNotificationModerationContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		verdicts moderationVerdicts
+		want     string
+	}{
+		{name: "manual without verdict"},
+		{name: "light only", verdicts: moderationVerdicts{Light: "spam\nlight reason"}, want: "spam\nlight reason"},
+		{name: "full verdict", verdicts: moderationVerdicts{Light: "spam\nlight reason", Full: "spam\nfull reason"}, want: "spam\nfull reason"},
+		{name: "decision", verdicts: moderationVerdicts{Full: "spam\nfull reason", Decision: "authoritative reason"}, want: "authoritative reason"},
+		{name: "content security", verdicts: moderationVerdicts{ContentFilterDetails: "hate: high"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"warning"}}]}`))
+			})
+			b.config.AI.Enabled = true
+			b.config.AI.FullModel = fullModelConfigs()
+			b.config.AI.ContentModeration.WarningPrompt = config.PromptPair{
+				System: "{{moderation_verdict}}",
+				User:   "{{message}}\n{{user_message}}",
+			}
+			_, err := b.generateWarningNotification("User", "original message", "", 7, -100, tt.verdicts)
+			require.NoError(t, err)
+			var request struct{ Messages []Message }
+			require.NoError(t, json.Unmarshal([]byte(rt.last().Body), &request))
+			require.Len(t, request.Messages, 2)
+			assert.Equal(t, tt.want, request.Messages[0].Content)
+			if tt.verdicts.ContentFilterDetails != "" {
+				assert.Contains(t, request.Messages[1].Content, "hate: high")
+				assert.NotContains(t, rt.last().Body, "original message")
+			} else {
+				assert.Contains(t, request.Messages[1].Content, "original message")
+			}
+			assert.NotContains(t, rt.last().Body, "{{")
+		})
+	}
+}
+
+func TestGenerateWarningNotificationContentFilterRetry(t *testing.T) {
+	for _, useFull := range []bool{false, true} {
+		t.Run(map[bool]string{false: "light", true: "full"}[useFull], func(t *testing.T) {
+			for _, blockedAgain := range []bool{false, true} {
+				t.Run(map[bool]string{false: "recovers", true: "bounded retry"}[blockedAgain], func(t *testing.T) {
+					calls := 0
+					b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+						calls++
+						if calls == 1 || blockedAgain {
+							w.WriteHeader(http.StatusBadRequest)
+							_, _ = w.Write([]byte(`{"error":{"code":"content_filter","innererror":{"content_filter_result":{"hate":{"filtered":true,"severity":"high"}}}}}`))
+							return
+						}
+						_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"warning"}}]}`))
+					})
+					b.config.AI.Enabled = true
+					b.config.AI.FullModel = fullModelConfigs()
+					b.config.AI.FullModel.Configs[0].DeploymentName = "warning-full"
+					b.config.AI.LightModel = fullModelConfigs()
+					b.config.AI.LightModel.Configs[0].DeploymentName = "warning-light"
+					b.config.AI.ContentModeration.WarningUseFullModel = &useFull
+					b.config.AI.ContentModeration.WarningPrompt = config.PromptPair{
+						System: "{{moderation_verdict}}",
+						User:   "{{message}}\n{{user_message}}",
+					}
+					_, err := b.generateWarningNotification("User", "original message", "", 7, -100, moderationVerdicts{Decision: "spam"})
+					if blockedAgain {
+						var cfErr *ContentFilterError
+						require.ErrorAs(t, err, &cfErr)
+					} else {
+						require.NoError(t, err)
+					}
+					assert.Equal(t, 2, calls)
+					assert.NotContains(t, rt.last().Body, "original message")
+					assert.Contains(t, rt.last().Body, "hate: high")
+					assert.Contains(t, rt.last().Body, "spam")
+					modelName := "warning-light"
+					if useFull {
+						modelName = "warning-full"
+					}
+					assert.Contains(t, rt.last().Path, "/deployments/"+modelName+"/")
+				})
+			}
+		})
+	}
 }

@@ -74,14 +74,18 @@ func TestBehavior_FlaggedDeleteRule_RemovesMessageAndLogsAction(t *testing.T) {
 func TestBehavior_FlaggedWarnRule_WarnsUserAndRecordsWarning(t *testing.T) {
 	b, tg := behaviorBot(t)
 	rules := []config.ModerationRule{{Trigger: "rude", Action: "warn", Description: "rudeness"}}
+	message := testMessage(-100, 7, 55, "you fool")
+	message.Chat.IsForum = true
+	message.MessageThreadID = 42
 
-	b.handleBadWordDetected(testMessage(-100, 7, 55, "you fool"), "you fool", false, rules, "")
+	b.handleBadWordDetected(message, "you fool", false, rules, "")
 
 	// A warning reply was delivered into the source chat, addressed to the message.
 	var warnedInChat bool
 	for _, m := range tg.SentMessages {
 		if m.ChatID == -100 && m.ReplyToMessageID == 55 {
 			warnedInChat = true
+			assert.Equal(t, 42, m.MessageThreadID)
 		}
 	}
 	assert.True(t, warnedInChat, "the user must be warned in the chat where they misbehaved")

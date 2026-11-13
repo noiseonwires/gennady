@@ -3,10 +3,14 @@
 package bot
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"gennadium/internal/config"
+	"gennadium/internal/database"
+	"gennadium/internal/i18n"
 
 	tgbotapi "gennadium/internal/telegram"
 	"github.com/stretchr/testify/assert"
@@ -117,6 +121,174 @@ func TestAnalyzeMessageContent_Disabled(t *testing.T) {
 	b.config.AI.ContentModeration.Enabled = false
 	_, _, err := b.analyzeMessageContentWithLightModel("x", 7, -100, "")
 	require.Error(t, err)
+}
+
+func TestAutomaticWarningReceivesLightAndFullVerdicts(t *testing.T) {
+	call := 0
+	var paths []string
+	b, tg, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		call++
+		paths = append(paths, r.URL.Path)
+		content := `мат\nlight reason`
+		if call == 2 {
+			content = `мат\nfull reason`
+		} else if call == 3 {
+			content = "warning"
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"` + content + `"}}]}`))
+	})
+	moderationConfig(b)
+	b.config.AI.LightModel.Configs[0].DeploymentName = "light-model"
+	b.config.AI.FullModel.Configs[0].DeploymentName = "full-model"
+	useFull := false
+	b.config.AI.ContentModeration.WarningUseFullModel = &useFull
+	b.moderatedMsgs = make(map[string]time.Time)
+	b.config.AI.ContentModeration.WarningPrompt = config.PromptPair{
+		System: "light={{light_verdict}}",
+		User:   "full={{full_verdict}} decision={{moderation_verdict}}",
+	}
+	message := testMessage(-100, 7, 55, "bad text")
+	mc := b.newInboundContext(message, false)
+	mc.Enhanced = message.Text
+
+	assert.True(t, b.analyzeMessage(mc))
+	assert.Equal(t, []string{
+		"/openai/deployments/light-model/chat/completions",
+		"/openai/deployments/full-model/chat/completions",
+		"/openai/deployments/light-model/chat/completions",
+	}, paths)
+	require.Len(t, tg.SentMessages, 1)
+	assert.Contains(t, rt.last().Body, `light=мат\nlight reason`)
+	assert.Contains(t, rt.last().Body, `full=мат\nfull reason`)
+	assert.Contains(t, rt.last().Body, `decision=мат\nfull reason`)
+}
+
+func TestAutomaticWarningReplacesFilteredMessageWithSafetyFlags(t *testing.T) {
+	for _, fullFiltered := range []bool{false, true} {
+		t.Run(map[bool]string{false: "light filtered full confirms", true: "full filtered"}[fullFiltered], func(t *testing.T) {
+			calls := 0
+			b, tg, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if (!fullFiltered && calls == 1) || (fullFiltered && calls == 2) {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"error":{"code":"content_filter","innererror":{"content_filter_result":{"violence":{"filtered":true,"severity":"high"}}}}}`))
+					return
+				}
+				if calls < 3 {
+					_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"мат\nspecific reason"}}]}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"warning"}}]}`))
+			})
+			moderationConfig(b)
+			b.moderatedMsgs = make(map[string]time.Time)
+			b.config.AI.ContentModeration.Rules = append(b.config.AI.ContentModeration.Rules,
+				config.ModerationRule{Trigger: ContentSecurityTrigger, Action: "warn"})
+			b.config.AI.ContentModeration.WarningPrompt = config.PromptPair{
+				System: "{{message}} {{moderation_verdict}}",
+				User:   "{{user_message}} {{light_verdict}} {{full_verdict}}",
+			}
+			message := testMessage(-100, 7, 55, "original blocked content")
+			mc := b.newInboundContext(message, false)
+			assert.True(t, b.analyzeMessage(mc))
+			assert.Equal(t, 3, calls, "the warning must not first retry the original blocked text")
+			require.Len(t, tg.SentMessages, 1)
+			assert.NotContains(t, rt.last().Body, "original blocked content")
+			assert.Contains(t, rt.last().Body, "violence: high")
+			assert.NotContains(t, rt.last().Body, "{{")
+		})
+	}
+}
+
+func TestAutomaticWarningPersistsLabelOnlyVerdict(t *testing.T) {
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"мат"}}]}`))
+	})
+	moderationConfig(b)
+	b.moderatedMsgs = make(map[string]time.Time)
+	b.config.AI.ContentModeration.WarningPrompt = config.PromptPair{User: "{{moderation_verdict}}"}
+	message := testMessage(-100, 7, 55, "bad text")
+
+	assert.True(t, b.analyzeMessage(b.newInboundContext(message, false)))
+	assert.Contains(t, rt.last().Body, "мат")
+	stored, err := b.db.GetMessageInfo(55, -100)
+	require.NoError(t, err)
+	assert.Equal(t, "мат", stored.ModerationReason)
+	assert.Equal(t, "мат", warningVerdictsFromMessage(stored).Decision)
+}
+
+func TestAutomaticWarningNewUserContentFilterUsesSafetyFlags(t *testing.T) {
+	calls := 0
+	b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 2 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":"content_filter","innererror":{"content_filter_result":{"violence":{"filtered":true,"severity":"high"}}}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	})
+	moderationConfig(b)
+	b.moderatedMsgs = make(map[string]time.Time)
+	b.config.AI.ContentModeration.FullModelFirstMessages = 1
+	b.config.AI.ContentModeration.Rules = []config.ModerationRule{{Trigger: ContentSecurityTrigger, Action: "warn"}}
+	b.config.AI.ContentModeration.WarningPrompt = config.PromptPair{User: "{{message}}"}
+
+	assert.True(t, b.analyzeMessage(b.newInboundContext(testMessage(-100, 7, 55, "original blocked content"), false)))
+	assert.Equal(t, 3, calls)
+	assert.Contains(t, rt.last().Body, "violence: high")
+	assert.NotContains(t, rt.last().Body, "original blocked content")
+}
+
+func TestManualWarningUsesStoredModerationContext(t *testing.T) {
+	for _, source := range []string{"telegram", "web"} {
+		for _, filtered := range []bool{false, true} {
+			t.Run(source+map[bool]string{false: "/text", true: "/filtered"}[filtered], func(t *testing.T) {
+				b, _, rt := newIntegrationBot(t, func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"warning"}}]}`))
+				})
+				b.config.AI.Enabled = true
+				b.config.AI.FullModel = fullModelConfigs()
+				b.config.Moderation.ChatIDs = config.ChatIDList{IDs: []int64{-100}}
+				b.config.AI.ContentModeration.WarningPrompt = config.PromptPair{
+					System: "{{moderation_verdict}}",
+					User:   "{{message}}\n{{user_message}}",
+				}
+				text := "original message"
+				if filtered {
+					text = contentPolicyPlaceholder
+				}
+				require.NoError(t, b.db.StoreMessageInfo(&database.MessageInfo{
+					MessageID: 55, ChatID: -100, UserID: 7, Text: text,
+					ModerationReason: "specific moderation reason", ExtraInfo: "violence: high", Timestamp: time.Now(),
+				}))
+				if source == "web" {
+					require.NoError(t, b.WebWarnUser(7, -100, 55, 1, "Admin"))
+				} else {
+					b.handleWarningAction(testCallbackQuery(1, -100, 55, "warn_-100_55_7_0"), []string{"warn", "-100", "55", "7", "0"})
+				}
+				require.NotNil(t, rt.last())
+				var request struct{ Messages []Message }
+				require.NoError(t, json.Unmarshal([]byte(rt.last().Body), &request))
+				assert.Equal(t, "specific moderation reason", request.Messages[0].Content)
+				if filtered {
+					assert.Contains(t, request.Messages[1].Content, "violence: high")
+					assert.NotContains(t, rt.last().Body, contentPolicyPlaceholder)
+				} else {
+					assert.Contains(t, request.Messages[1].Content, "original message")
+					assert.NotContains(t, request.Messages[1].Content, "violence: high", "unrelated extra_info must not replace the message")
+				}
+			})
+		}
+	}
+}
+
+func TestWarningVerdictsFromFilteredMessageWithoutFlags(t *testing.T) {
+	for _, placeholder := range []string{i18n.T("filter.content_removed"), contentPolicyPlaceholder} {
+		verdicts := warningVerdictsFromMessage(&database.MessageInfo{Text: placeholder})
+		assert.NotEmpty(t, verdicts.ContentFilterDetails)
+		assert.Equal(t, i18n.T("mod.content_security_details"), verdicts.ContentFilterDetails)
+	}
 }
 
 // --- auto-moderation actions (assert recorded telegram calls) -----------------

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 // --- defaults.go --------------------------------------------------------------
@@ -25,6 +26,9 @@ func TestSetDefaults(t *testing.T) {
 	assert.Equal(t, 24, c.AI.ContentModeration.NewUserWindowHours)
 	assert.Equal(t, 500, c.AI.ContentModeration.ReplyContextMaxChars)
 	assert.Equal(t, 3, c.AI.ContentModeration.AdminNotificationDelaySeconds)
+	assert.Equal(t, "/usr/bin/ffmpeg", c.AI.ContentModeration.FFmpegPath)
+	assert.False(t, c.AI.ContentModeration.FFmpegEnabled)
+	assert.False(t, c.AI.CreativeReplies.SkipRateLimitForAdmins)
 	require.NotNil(t, c.AI.CreativeReplies.ContextOnlyCurrentTopic)
 	assert.True(t, *c.AI.CreativeReplies.ContextOnlyCurrentTopic)
 	// Update-processing defaults: in-order single worker, stats on every 10 min.
@@ -52,6 +56,83 @@ func TestCreativeRepliesContextOnlyCurrentTopic_DefaultsOn(t *testing.T) {
 	disabled := false
 	config.ContextOnlyCurrentTopic = &disabled
 	assert.False(t, config.IsContextOnlyCurrentTopic())
+}
+
+func TestCreativeRepliesSkipRateLimitForAdmins_ConfigSources(t *testing.T) {
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte("ai:\n  creative_replies:\n    skip_rate_limit_for_admins: true\n"), &cfg))
+	setDefaults(&cfg)
+	assert.True(t, cfg.AI.CreativeReplies.SkipRateLimitForAdmins)
+	assert.Equal(t, true, GetConfigValues(&cfg)["ai.creative_replies.skip_rate_limit_for_admins"])
+	assert.Contains(t, ExportEnvVars(&cfg), "AI_CREATIVE_REPLIES_SKIP_RATE_LIMIT_FOR_ADMINS=true")
+
+	for _, tt := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "false", want: false},
+		{value: "true", want: true},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			t.Setenv("AI_CREATIVE_REPLIES_SKIP_RATE_LIMIT_FOR_ADMINS", tt.value)
+			cfg := &Config{}
+			cfg.AI.CreativeReplies.SkipRateLimitForAdmins = !tt.want
+			applyEnvOverrides(cfg)
+			assert.Equal(t, tt.want, cfg.AI.CreativeReplies.SkipRateLimitForAdmins)
+		})
+	}
+}
+
+func TestWarningUseFullModel(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		yaml string
+		want bool
+		env  string
+	}{
+		{name: "omitted", want: true, env: "true"},
+		{name: "full", yaml: "ai:\n  content_moderation:\n    warning_use_full_model: true\n", want: true, env: "true"},
+		{name: "light", yaml: "ai:\n  content_moderation:\n    warning_use_full_model: false\n", env: "false"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg Config
+			require.NoError(t, yaml.Unmarshal([]byte(tt.yaml), &cfg))
+			assert.Equal(t, tt.want, cfg.AI.ContentModeration.IsWarningUseFullModel())
+			setDefaults(&cfg)
+			require.NotNil(t, cfg.AI.ContentModeration.WarningUseFullModel)
+			assert.Equal(t, tt.want, *cfg.AI.ContentModeration.WarningUseFullModel)
+			assert.Equal(t, tt.want, GetConfigValues(&cfg)["ai.content_moderation.warning_use_full_model"])
+			assert.Contains(t, ExportEnvVars(&cfg), "AI_CONTENT_MODERATION_WARNING_USE_FULL_MODEL="+tt.env)
+
+			data, err := yaml.Marshal(&cfg)
+			require.NoError(t, err)
+			var restored Config
+			require.NoError(t, yaml.Unmarshal(data, &restored))
+			assert.Equal(t, tt.want, restored.AI.ContentModeration.IsWarningUseFullModel())
+
+			var fromDB Config
+			ApplyStringMap(&fromDB, ConfigToStringMap(&cfg))
+			setDefaults(&fromDB)
+			assert.Equal(t, tt.want, fromDB.AI.ContentModeration.IsWarningUseFullModel())
+		})
+	}
+}
+
+func TestSetDefaults_FFmpegPathAndExplicitOptIn(t *testing.T) {
+	for _, path := range []string{"", " \t ", `C:\Media Tools\ffmpeg.exe`, "ffmpeg"} {
+		for _, enabled := range []bool{false, true} {
+			cfg := &Config{}
+			cfg.AI.ContentModeration.FFmpegPath = path
+			cfg.AI.ContentModeration.FFmpegEnabled = enabled
+			setDefaults(cfg)
+			want := path
+			if path == "" || path == " \t " {
+				want = "/usr/bin/ffmpeg"
+			}
+			assert.Equal(t, want, cfg.AI.ContentModeration.FFmpegPath)
+			assert.Equal(t, enabled, cfg.AI.ContentModeration.FFmpegEnabled)
+		}
+	}
 }
 
 // --- config_reflect.go --------------------------------------------------------
@@ -175,6 +256,8 @@ func TestApplyEnvOverrides(t *testing.T) {
 	t.Setenv("SERVER_LISTEN_PORT", "7000")
 	t.Setenv("WEB_UI_ENABLED", "true")
 	t.Setenv("MODERATION_CHAT_ID", "-100,-200")
+	t.Setenv("AI_CONTENT_MODERATION_FFMPEG_PATH", `C:\Media Tools\ffmpeg.exe`)
+	t.Setenv("AI_CONTENT_MODERATION_FFMPEG_ENABLED", "true")
 
 	c := &Config{}
 	applyEnvOverrides(c)
@@ -182,6 +265,37 @@ func TestApplyEnvOverrides(t *testing.T) {
 	assert.Equal(t, 7000, c.Server.ListenPort)
 	assert.True(t, c.WebUI.Enabled)
 	assert.Equal(t, []int64{-100, -200}, c.Moderation.ChatIDs.IDs)
+	assert.Equal(t, `C:\Media Tools\ffmpeg.exe`, c.AI.ContentModeration.FFmpegPath)
+	assert.True(t, c.AI.ContentModeration.FFmpegEnabled)
+}
+
+func TestApplyEnvOverrides_FFmpegOptOut(t *testing.T) {
+	t.Setenv("AI_CONTENT_MODERATION_FFMPEG_ENABLED", "false")
+	cfg := &Config{}
+	cfg.AI.ContentModeration.FFmpegEnabled = true
+	applyEnvOverrides(cfg)
+	setDefaults(cfg)
+	assert.False(t, cfg.AI.ContentModeration.FFmpegEnabled)
+	assert.Equal(t, "/usr/bin/ffmpeg", cfg.AI.ContentModeration.FFmpegPath)
+}
+
+func TestApplyEnvOverrides_WarningUseFullModel(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "true", want: true},
+		{value: "false"},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			t.Setenv("AI_CONTENT_MODERATION_WARNING_USE_FULL_MODEL", tt.value)
+			cfg := &Config{}
+			cfg.AI.ContentModeration.WarningUseFullModel = boolPtr(!tt.want)
+			applyEnvOverrides(cfg)
+			setDefaults(cfg)
+			assert.Equal(t, tt.want, cfg.AI.ContentModeration.IsWarningUseFullModel())
+		})
+	}
 }
 
 func TestApplyEnvOverrides_IndexedModelSlice(t *testing.T) {

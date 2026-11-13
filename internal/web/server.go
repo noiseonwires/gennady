@@ -43,17 +43,7 @@ func NewWebServer(cfg *config.Config, db *database.DB, diagnostics *DiagnosticsT
 	auth := NewAuthManager(db)
 	mux := http.NewServeMux()
 
-	prefix := cfg.WebUI.PathPrefix
-	if prefix == "" {
-		prefix = "/admin"
-	}
-	prefix = strings.TrimRight(prefix, "/")
-
-	modPrefix := cfg.WebUI.ModeratorPathPrefix
-	if modPrefix == "" {
-		modPrefix = "/mod"
-	}
-	modPrefix = strings.TrimRight(modPrefix, "/")
+	prefix, modPrefix := cfg.WebUI.PathPrefixes()
 	// Never let the moderator surface collide with the super-admin surface; if
 	// misconfigured to the same prefix, disable the moderator UI rather than
 	// shadowing the full UI with the reduced route set.
@@ -168,6 +158,7 @@ func (ws *WebServer) registerRoutes() {
 	ws.Mux.HandleFunc(p+"/api/auth/logout", ws.requireAuth(ws.handler.handleLogout))
 
 	ws.Mux.HandleFunc(p+"/api/config", ws.requireAuth(ws.handleConfigRoute))
+	ws.Mux.HandleFunc(p+"/api/config/secret", ws.requireAuth(ws.handler.handleGetConfigSecret))
 	ws.Mux.HandleFunc(p+"/api/config/meta", ws.requireAuth(ws.handler.handleGetConfigMeta))
 	ws.Mux.HandleFunc(p+"/api/config/rss", ws.requireAuth(ws.handleRssRoute))
 	ws.Mux.HandleFunc(p+"/api/config/website-watch", ws.requireAuth(ws.handleWebsiteWatchRoute))

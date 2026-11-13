@@ -46,6 +46,7 @@ function configSection(sectionId) {
         msg: '',
         msgClass: 'save-msg',
         revealed: {},
+        revealing: {},
 
         get fields() {
             const meta = Alpine.store('app').configMeta;
@@ -63,6 +64,36 @@ function configSection(sectionId) {
 
         fieldDesc(f) {
             return Alpine.store('i18n').lang === 'ru' ? (f.desc_ru || f.desc_en) : f.desc_en;
+        },
+
+        async toggleSecret(key) {
+            if (this.revealing[key]) return;
+            if (this.revealed[key]) {
+                this.revealed[key] = false;
+                return;
+            }
+            if (this.values[key] !== '__redacted__') {
+                this.revealed[key] = true;
+                return;
+            }
+
+            this.revealing[key] = true;
+            try {
+                const r = await api('/api/config/secret?key=' + encodeURIComponent(key));
+                const d = await r.json();
+                if (!r.ok) {
+                    flashMsg(this, Alpine.store('i18n').err(d) || Alpine.store('i18n').t('cfg_error'), false);
+                    return;
+                }
+                if (typeof d.value !== 'string') throw new Error('Invalid secret response');
+                // Do not overwrite an edit made while the request was pending.
+                if (this.values[key] === '__redacted__') this.values[key] = d.value;
+                this.revealed[key] = true;
+            } catch {
+                flashMsg(this, Alpine.store('i18n').t('cfg_error'), false);
+            } finally {
+                this.revealing[key] = false;
+            }
         },
 
         isTextarea(f) {
@@ -222,4 +253,3 @@ function chatTopicListField(fieldKey) {
         }
     };
 }
-

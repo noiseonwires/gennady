@@ -51,6 +51,8 @@ type AzureContentSafetyResponse struct {
 	} `json:"categoriesAnalysis"`
 }
 
+var errImageSafetyIncomplete = errors.New("image Content Safety check is incomplete")
+
 func (b *Bot) imageAnalysisModels() config.AIModelConfigs {
 	models := make([]config.AIModelConfig, 0)
 	seen := make(map[string]struct{})
@@ -125,17 +127,19 @@ func (b *Bot) analyzeImageWithAI(imageData []byte) (string, bool, error) {
 	}
 
 	contentSafetyFlagged := false
+	var safetyErr error
 	if b.config.AI.ContentModeration.ContentSafetyEnabled {
 		flagged, details, err := b.analyzeImageContentSafety(imageData)
 		if err != nil {
 			log.Printf("Error analyzing AI-processed image with Content Safety API: %v", err)
+			safetyErr = errors.Join(errImageSafetyIncomplete, err)
 		} else if flagged {
 			contentSafetyFlagged = true
 			result = fmt.Sprintf("[Content Safety: %s] %s", strings.TrimSpace(details), result)
 		}
 	}
 
-	return strings.TrimSpace(result), contentSafetyFlagged, nil
+	return strings.TrimSpace(result), contentSafetyFlagged, safetyErr
 }
 
 // analyzeImageWithVision analyzes an image using Azure Vision API.
@@ -174,10 +178,12 @@ func (b *Bot) analyzeImageWithVision(imageData []byte) (string, bool, error) {
 
 	var result strings.Builder
 	contentSafetyFlagged := false
+	var safetyErr error
 
 	if b.config.AI.ContentModeration.ContentSafetyEnabled {
 		if hasInappropriateContent, details, err := b.analyzeImageContentSafety(imageData); err != nil {
 			log.Printf("Error analyzing image with Content Safety API: %v", err)
+			safetyErr = errors.Join(errImageSafetyIncomplete, err)
 		} else if hasInappropriateContent {
 			contentSafetyFlagged = true
 			result.WriteString(fmt.Sprintf("[Content Safety: %s] ", strings.TrimSpace(details)))
@@ -200,11 +206,11 @@ func (b *Bot) analyzeImageWithVision(imageData []byte) (string, bool, error) {
 
 	resultText := strings.TrimSpace(result.String())
 	if resultText == "" {
-		return i18n.T("ai.vision_no_description"), contentSafetyFlagged, nil
+		return i18n.T("ai.vision_no_description"), contentSafetyFlagged, safetyErr
 	}
 
 	log.Printf("Vision API analysis result: %s", resultText)
-	return resultText, contentSafetyFlagged, nil
+	return resultText, contentSafetyFlagged, safetyErr
 }
 
 // analyzeImageWithOCRSpace sends image data to the OCR.space API
@@ -363,9 +369,15 @@ func (b *Bot) testOCRSpace() (int, error) {
 
 // downloadImage downloads an image from Telegram.
 func (b *Bot) downloadImage(fileID string) ([]byte, error) {
+	if fileID == "" {
+		return nil, fmt.Errorf("media file ID is empty")
+	}
 	file, err := b.tg.GetFile(fileID)
 	if err != nil {
 		return nil, fmt.Errorf("error getting file info: %v", err)
+	}
+	if file.FileSize > maxMediaBytes {
+		return nil, fmt.Errorf("media exceeds %d-byte download limit", maxMediaBytes)
 	}
 
 	fileURL := file.DownloadURL
@@ -379,9 +391,15 @@ func (b *Bot) downloadImage(fileID string) ([]byte, error) {
 		return nil, fmt.Errorf("error downloading file: status %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	if resp.ContentLength > maxMediaBytes {
+		return nil, fmt.Errorf("media exceeds %d-byte download limit", maxMediaBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxMediaBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("error reading file data: %v", err)
+	}
+	if len(data) == 0 || len(data) > maxMediaBytes {
+		return nil, fmt.Errorf("media must contain 1 to %d bytes", maxMediaBytes)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -474,17 +492,24 @@ func (b *Bot) describeImageWithFallback(imageData []byte) (string, bool, error) 
 	var desc string
 	var flagged bool
 	var err error
+	var incompleteSafety error
 
 	if aiEnabled {
 		desc, flagged, err = b.analyzeImageWithAI(imageData)
 		if err != nil {
 			log.Printf("Image analysis (AI) error: %v", err)
+			if errors.Is(err, errImageSafetyIncomplete) {
+				incompleteSafety = err
+			}
 		}
 	}
 	if desc == "" && visionEnabled {
 		desc, flagged, err = b.analyzeImageWithVision(imageData)
 		if err != nil {
 			log.Printf("Image analysis (Vision) error: %v", err)
+			if errors.Is(err, errImageSafetyIncomplete) {
+				incompleteSafety = err
+			}
 		}
 	}
 	if desc == "" && ocrSpaceEnabled {
@@ -492,6 +517,9 @@ func (b *Bot) describeImageWithFallback(imageData []byte) (string, bool, error) 
 		if err != nil {
 			log.Printf("Image analysis (OCR.space) error: %v", err)
 		}
+	}
+	if incompleteSafety != nil && !errors.Is(err, errImageSafetyIncomplete) {
+		err = errors.Join(err, incompleteSafety)
 	}
 	return strings.TrimSpace(desc), flagged, err
 }

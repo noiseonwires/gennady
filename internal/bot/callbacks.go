@@ -126,12 +126,16 @@ func (b *Bot) handleWarningAction(query *tgbotapi.CallbackQuery, parts []string)
 	}
 
 	// Get username from stored message data
-	_, username, messageText, err := b.getUserInfoFromMessage(chatID, messageID)
+	messageInfo, err := b.db.GetMessageInfo(messageID, chatID)
+	username, messageText := "", ""
+	var verdicts moderationVerdicts
 	if err != nil {
 		log.Printf("Warning: Could not get message info from database: %v. Proceeding with fallback.", err)
 		// Fallback: continue without message text, we can still issue warning
-		username = ""
-		messageText = ""
+	} else {
+		username = messageInfo.Username
+		messageText = messageInfo.Text
+		verdicts = warningVerdictsFromMessage(messageInfo)
 	}
 
 	// Check if warning already exists for this message
@@ -186,27 +190,18 @@ func (b *Bot) handleWarningAction(query *tgbotapi.CallbackQuery, parts []string)
 
 	// Send warning message to user
 	displayName := b.getUserDisplayName(userID)
-	warningText, err := b.generateWarningNotification(displayName, messageText, muteInfoText, userID, chatID)
+	warningText, err := b.generateWarningNotification(displayName, messageText, muteInfoText, userID, chatID, verdicts)
 	if err != nil {
 		log.Printf("Error generating AI warning: %v", err)
-		// If content filter triggered and we had message content, retry without it
-		if strings.Contains(err.Error(), "content_filter") && messageText != "" {
-			log.Printf("Content filter triggered during warning generation, retrying without message content")
-			warningText, err = b.generateWarningNotification(displayName, "", muteInfoText, userID, chatID)
-			if err != nil {
-				log.Printf("Error generating AI warning without message content: %v", err)
-				warningText = i18n.T("warn.fallback")
-			}
-		} else {
-			// Fallback to static text
-			warningText = i18n.T("warn.fallback")
-		}
+		warningText = i18n.T("warn.fallback")
 	}
 
 	sentWarningMsg, err := b.tg.SendMessage(telegram.SendMessageParams{
-		ChatID:           chatID,
-		Text:             warningText,
-		ReplyToMessageID: messageID,
+		ChatID:             chatID,
+		Text:               warningText,
+		ReplyToMessageID:   messageID,
+		RequireReplyTarget: true,
+		MessageThreadID:    threadID,
 	})
 	if err != nil {
 		log.Printf("Error sending warning message: %v", err)
@@ -768,10 +763,7 @@ func (b *Bot) handleAdminModWebUI(query *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	modPrefix := strings.TrimRight(strings.TrimSpace(b.config.WebUI.ModeratorPathPrefix), "/")
-	if modPrefix == "" {
-		modPrefix = "/mod"
-	}
+	_, modPrefix := b.config.WebUI.PathPrefixes()
 
 	token, otp := b.generateModeratorLogin(query.From.ID, getUserDisplayNameFromUser(query.From))
 	link := publicURL + modPrefix + "/#t=" + token

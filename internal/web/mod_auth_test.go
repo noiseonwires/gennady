@@ -149,6 +149,7 @@ func TestModeratorRoutes_ConfigEndpointsNotMounted(t *testing.T) {
 	for _, path := range []string{
 		"/mod/api/config",
 		"/mod/api/config/meta",
+		"/mod/api/config/secret?key=bot_token",
 		"/mod/api/logs",
 		"/mod/api/restart",
 		"/mod/api/files/db",
@@ -247,4 +248,32 @@ func TestHandleGetVersion_RoleFromToken(t *testing.T) {
 	r.AddCookie(&http.Cookie{Name: webSessionCookieName, Value: modSess})
 	h.handleGetVersion(rr, r)
 	assert.Equal(t, RoleModerator, decodeJSONBody(t, rr)["role"])
+}
+
+func TestModeratorVersion_SuperSessionStillReportsLimitedRole(t *testing.T) {
+	cfg := newTestConfig()
+	cfg.WebUI.PublicURL = "https://panel.example.com"
+	cfg.WebUI.PathPrefix = "/admin1"
+	cfg.WebUI.ModeratorPathPrefix = "/admin1/modentry"
+	ws := NewWebServer(cfg, newTestDB(t), NewDiagnosticsTracker(), "config.yaml", false)
+	session := ws.auth.CreatePasswordSession()
+
+	for _, prefix := range []string{ws.pathPrefix, ws.moderatorPrefix} {
+		rr := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, prefix+"/api/version", nil)
+		r.AddCookie(&http.Cookie{Name: webSessionCookieName, Value: session})
+		ws.Mux.ServeHTTP(rr, r)
+		require.Equal(t, http.StatusOK, rr.Code)
+		wantRole := RoleSuper
+		if prefix == ws.moderatorPrefix {
+			wantRole = RoleModerator
+		}
+		assert.Equal(t, wantRole, decodeJSONBody(t, rr)["role"])
+	}
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, ws.moderatorPrefix+"/api/config", nil)
+	r.AddCookie(&http.Cookie{Name: webSessionCookieName, Value: session})
+	ws.Mux.ServeHTTP(rr, r)
+	assert.Equal(t, http.StatusNotFound, rr.Code)
 }

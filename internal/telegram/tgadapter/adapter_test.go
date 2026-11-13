@@ -84,7 +84,7 @@ func (f *fakeTelegram) adapter(t *testing.T) *Adapter {
 
 func TestAdapter_SendMessage(t *testing.T) {
 	f := newFakeTelegram(t)
-	f.set("sendMessage", `{"ok":true,"result":{"message_id":7,"chat":{"id":-100},"text":"hi"}}`)
+	f.set("sendMessage", `{"ok":true,"result":{"message_id":7,"chat":{"id":-100},"reply_to_message":{"message_id":3,"chat":{"id":-100}},"text":"hi"}}`)
 	a := f.adapter(t)
 
 	kb := telegram.NewKeyboard(
@@ -95,6 +95,7 @@ func TestAdapter_SendMessage(t *testing.T) {
 		Text:                  "hi",
 		ParseMode:             telegram.ParseModeMarkdown,
 		ReplyToMessageID:      3,
+		RequireReplyTarget:    true,
 		DisableWebPagePreview: true,
 		Keyboard:              &kb,
 	})
@@ -109,6 +110,26 @@ func TestAdapter_SendMessage(t *testing.T) {
 	assert.Contains(t, form.Get("reply_parameters"), "\"message_id\":3")
 	assert.Contains(t, form.Get("reply_markup"), "cb")
 	assert.Contains(t, form.Get("reply_markup"), "https://x")
+}
+
+func TestAdapter_SendMessage_DeletesOrphanWhenReplyTargetMissing(t *testing.T) {
+	f := newFakeTelegram(t)
+	f.set("sendMessage", `{"ok":true,"result":{"message_id":7,"chat":{"id":-100},"message_thread_id":50,"text":"hi"}}`)
+	f.set("deleteMessage", `{"ok":true,"result":true}`)
+	a := f.adapter(t)
+
+	_, err := a.SendMessage(telegram.SendMessageParams{
+		ChatID:             -100,
+		Text:               "hi",
+		ReplyToMessageID:   3,
+		MessageThreadID:    50,
+		RequireReplyTarget: true,
+	})
+
+	require.ErrorIs(t, err, telegram.ErrReplyTargetMissing)
+	deleteForm := f.lastForm["deleteMessage"]
+	assert.Equal(t, "-100", deleteForm.Get("chat_id"))
+	assert.Equal(t, "7", deleteForm.Get("message_id"))
 }
 
 func TestAdapter_SendMessage_Error(t *testing.T) {

@@ -264,9 +264,10 @@ func (h *apiHandler) moderatorUIInfo() map[string]interface{} {
 	}
 }
 
-// effectivePublicURL resolves the externally-reachable base URL (scheme + host,
-// no path) used to build moderator login links: web_ui.public_url, falling back
-// to the scheme+host of webhook.url. Returns ("", "") when none is resolvable.
+// effectivePublicURL resolves the externally-reachable scheme+host used to
+// build moderator login links. Prefers
+// web_ui.public_url, falling back to the scheme+host of webhook.url.
+// Returns ("", "") when none is resolvable.
 // Mirrors the bot-side resolver that actually builds the links.
 func (h *apiHandler) effectivePublicURL() (base, source string) {
 	if u := strings.TrimRight(strings.TrimSpace(h.config.WebUI.PublicURL), "/"); u != "" {

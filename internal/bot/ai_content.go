@@ -21,7 +21,9 @@ import (
 var linkOnlyRegex = regexp.MustCompile(`(?i)^(https?://|www\.)\S+$`)
 
 // generateMessageSummary generates a short summary for long messages in moderation chat.
-func (b *Bot) generateMessageSummary(message *tgbotapi.Message) {
+// lengthText is the original user-authored text when message.Text contains
+// appended image analysis.
+func (b *Bot) generateMessageSummary(message *tgbotapi.Message, lengthText ...string) {
 	if !b.config.AI.Enabled || !b.config.AI.MessageSummaries.Enabled {
 		return
 	}
@@ -35,18 +37,22 @@ func (b *Bot) generateMessageSummary(message *tgbotapi.Message) {
 	}
 
 	messageText := message.TextWithEntityLinks()
+	textForLength := messageText
+	if len(lengthText) > 0 {
+		textForLength = lengthText[0]
+	}
+	charCount := utf8.RuneCountInString(textForLength)
 
-	if messageText == "" || utf8.RuneCountInString(messageText) <= b.config.AI.MessageSummaries.MinLength {
+	if messageText == "" || charCount <= b.config.AI.MessageSummaries.MinLength {
 		return
 	}
 
-	log.Printf("Generating summary for long message %d (length: %d chars)", message.MessageID, utf8.RuneCountInString(messageText))
+	log.Printf("Generating summary for long message %d (user-authored length: %d chars)", message.MessageID, charCount)
 
 	replacements := map[string]string{"message": messageText}
 	systemPrompt := applyReplacements(b.config.AI.MessageSummaries.Prompt.System, replacements)
 	prompt := applyReplacements(b.config.AI.MessageSummaries.Prompt.User, replacements)
 
-	charCount := utf8.RuneCountInString(messageText)
 	var modelConfigs config.AIModelConfigs
 	var modelType string
 
@@ -75,7 +81,7 @@ func (b *Bot) generateMessageSummary(message *tgbotapi.Message) {
 		log.Printf("Successfully generated summary for message %d", message.MessageID)
 
 		summaryText := fmt.Sprintf("*TL;DR:* %s", summary)
-		sentMsg, ok := b.sendMarkdownReply(message.Chat.ID, summaryText, message.MessageID)
+		sentMsg, ok := b.sendMarkdownReply(message, summaryText)
 		if !ok {
 			return
 		}
@@ -125,11 +131,12 @@ func (b *Bot) generateCreativeReplyWithQuote(messageText string, quotedText stri
 	if b.config.AI.CreativeReplies.UseFullModel {
 		models = b.config.AI.FullModel
 	}
-	if b.config.AI.CreativeReplies.MessageToolsEnabled {
+	if b.config.AI.CreativeReplies.MessageToolsEnabled || b.config.AI.CreativeReplies.ReputationToolEnabled {
 		scope := b.creativeMessageToolScope(messageID, chatID)
-		if scope.TopicOnly && !scope.TopicResolved {
+		if b.config.AI.CreativeReplies.MessageToolsEnabled && scope.TopicOnly && !scope.TopicResolved {
 			log.Printf("Creative-reply message tools skipped: current topic could not be resolved")
-		} else if result, err := b.callCreativeReplyWithMessageTools(prompt, systemPrompt, models, scope); err == nil {
+		}
+		if result, err := b.callCreativeReplyWithMessageTools(prompt, systemPrompt, models, scope); err == nil {
 			return result, nil
 		} else {
 			var contentFilterErr *ContentFilterError
@@ -882,7 +889,7 @@ func (b *Bot) extractAndStoreLinksContent(message *tgbotapi.Message) bool {
 // postLinkSummary posts a pre-generated summary for a link.
 func (b *Bot) postLinkSummary(message *tgbotapi.Message, targetURL, summary, title string) {
 	summaryText := i18n.Tf("link.summary", summary)
-	sentMsg, ok := b.sendMarkdownReply(message.Chat.ID, summaryText, message.MessageID)
+	sentMsg, ok := b.sendMarkdownReply(message, summaryText)
 	if !ok {
 		return
 	}

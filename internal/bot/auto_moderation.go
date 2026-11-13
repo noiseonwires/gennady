@@ -197,7 +197,7 @@ func (b *Bot) autoModerateDelete(message *tgbotapi.Message, messageText string, 
 // autoModerateWarn issues a warning to the user (mirroring handleWarningAction
 // but with the bot acting as the moderator). The original message is kept;
 // only a warning reply is sent.
-func (b *Bot) autoModerateWarn(message *tgbotapi.Message, messageText string, rule *config.ModerationRule, adminNotificationAllowed bool) {
+func (b *Bot) autoModerateWarn(message *tgbotapi.Message, messageText string, rule *config.ModerationRule, adminNotificationAllowed bool, modelVerdicts ...moderationVerdicts) {
 	if message.From == nil {
 		log.Printf("Auto-moderation (warn): cannot warn anonymous message %d", message.MessageID)
 		return
@@ -243,20 +243,18 @@ func (b *Bot) autoModerateWarn(message *tgbotapi.Message, messageText string, ru
 		}
 	}
 	displayName := b.getUserDisplayName(ctx.userID)
-	warningText, werr := b.generateWarningNotification(displayName, messageText, muteInfoText, ctx.userID, ctx.chatID)
+	warningText, werr := b.generateWarningNotification(displayName, messageText, muteInfoText, ctx.userID, ctx.chatID, modelVerdicts...)
 	if werr != nil {
-		if strings.Contains(werr.Error(), "content_filter") && messageText != "" {
-			warningText, werr = b.generateWarningNotification(displayName, "", muteInfoText, ctx.userID, ctx.chatID)
-		}
-		if werr != nil {
-			warningText = i18n.T("warn.fallback")
-		}
+		log.Printf("Auto-moderation (warn): error generating AI warning: %v", werr)
+		warningText = i18n.T("warn.fallback")
 	}
 
 	sent, err := b.tg.SendMessage(telegram.SendMessageParams{
-		ChatID:           ctx.chatID,
-		Text:             warningText,
-		ReplyToMessageID: ctx.messageID,
+		ChatID:             ctx.chatID,
+		Text:               warningText,
+		ReplyToMessageID:   ctx.messageID,
+		RequireReplyTarget: true,
+		MessageThreadID:    messageTopic(message),
 	})
 	if err != nil {
 		log.Printf("Auto-moderation (warn): error sending warning message: %v", err)

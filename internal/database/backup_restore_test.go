@@ -141,6 +141,12 @@ func seedAllBackedUpTables(t *testing.T, db *DB) {
 
 	require.NoError(t, db.SaveWebsiteSnapshot("https://example.com/rules", "rule one", "hash-1"))
 	require.NoError(t, db.SaveWebsiteSnapshot("https://example.com/prices", "price list", "hash-2"))
+	require.NoError(t, db.SaveMediaAnalysis("media-hash-1", MediaAnalysis{
+		Description: "sticker description", ContentSafetyFlagged: false,
+	}))
+	require.NoError(t, db.SaveMediaAnalysis("media-hash-2", MediaAnalysis{
+		Description: "flagged animation", ContentSafetyFlagged: true,
+	}))
 }
 
 // backedUpTables lists the tables a backup is expected to carry, paired with
@@ -165,6 +171,7 @@ var backedUpTables = []struct {
 	{"token_usage", nil},
 	{"forum_topics", []string{"updated_at"}},                    // updated_at is write-time bookkeeping
 	{"website_snapshots", []string{"changed_at", "checked_at"}}, // write-time bookkeeping
+	{"media_analysis_cache", nil},
 }
 
 // TestBackupRestore_IntoEmptyDB_LosesNoData is the headline guarantee: a full

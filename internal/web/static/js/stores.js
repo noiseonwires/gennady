@@ -266,7 +266,7 @@ document.addEventListener('alpine:init', () => {
         // enforces the same boundary: the moderator prefix simply doesn't mount
         // config / logs / system / test / debug endpoints.
         get isModerator() {
-            return this.role === 'moderator';
+            return Alpine.store('auth').moderator || this.role === 'moderator';
         },
 
         // visibleNavItems is the role-filtered navigation. Moderators only see
@@ -433,8 +433,8 @@ document.addEventListener('alpine:init', () => {
     });
 
     /* Global init */
-    Alpine.store('i18n').load().then(() => {
-        Alpine.store('auth').fetchMode();
-        Alpine.store('auth').check();
+    Alpine.store('i18n').load().then(async () => {
+        await Alpine.store('auth').fetchMode();
+        await Alpine.store('auth').check();
     });
 });

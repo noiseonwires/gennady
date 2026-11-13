@@ -250,6 +250,10 @@ type BackupConfig struct {
 	// IncludeConfig controls whether the config_values table (which holds
 	// secrets when the DB is the config source) is part of the backup.
 	IncludeConfig bool `yaml:"include_config"`
+	// Encrypt wraps the snapshot in an AES-256 encrypted ZIP before upload.
+	Encrypt bool `yaml:"encrypt"`
+	// EncryptionPassword is required when Encrypt is true and is used verbatim.
+	EncryptionPassword string `yaml:"encryption_password" web:"sensitive"`
 	// NotifyOnFailure DMs the super-admin (admin.super_admin_user_id) when a
 	// scheduled backup fails, with the error details. Independent of
 	// admin.notify_startup.
@@ -353,9 +357,11 @@ type WebUIConfig struct {
 	// read-only diagnostics view; configuration, logs, system and file/DB
 	// endpoints are never registered under this prefix.
 	ModeratorPathPrefix string `yaml:"moderator_path_prefix"`
-	// PublicURL is the externally-reachable base URL of the web UI (e.g.
-	// https://bot.example.com), without any path prefix. It is used to build
-	// the one-time moderator login link sent over Telegram. When empty, it
+	// PublicURL is the externally-reachable scheme+host of the web UI (e.g.
+	// https://bot.example.com), without a path; validation rejects paths.
+	// PathPrefix and ModeratorPathPrefix are absolute and may be nested (e.g.
+	// /panel and /panel/mod) so one reverse-proxy rule covers both UIs. It
+	// builds the one-time moderator login link. When empty, it
 	// falls back to the scheme+host of Webhook.URL (if set); the "Access Web
 	// UI" button is hidden when no public URL can be resolved.
 	PublicURL string `yaml:"public_url"`
@@ -467,6 +473,13 @@ type ContentModerationConfig struct {
 	ContentSafetyEnabled          bool   `yaml:"content_safety_enabled"`
 	ContentSafetyEndpoint         string `yaml:"content_safety_endpoint"`
 	ContentSafetyAPIKey           string `yaml:"content_safety_api_key" web:"sensitive"`
+	// FFmpegEnabled opts into animation/sticker analysis, including cached verdicts.
+	// Disabled by default; photo analysis does not depend on this switch.
+	FFmpegEnabled bool `yaml:"ffmpeg_enabled"`
+	// FFmpegPath defaults to /usr/bin/ffmpeg. FFmpeg renders images;
+	// the separate ffprobe executable reads metadata/counts frames and is located
+	// automatically beside FFmpeg. Empty uses the default path.
+	FFmpegPath string `yaml:"ffmpeg_path"`
 	// AIImageAnalysisEnabled sends images to configured multimodal AI models
 	// before falling back to Azure Vision and OCR.space.
 	AIImageAnalysisEnabled bool       `yaml:"ai_image_analysis_enabled"`
@@ -475,8 +488,8 @@ type ContentModerationConfig struct {
 	// messages in (chat, topic) pairs excluded from AI moderation via
 	// moderation.excluded_topics, so the recorded chat history still carries the
 	// OCR text and description of images. The Content Safety image verdict is
-	// never acted on outside a moderated scope. Off by default; costs one image
-	// API call per photo in excluded chats.
+	// never acted on outside a moderated scope. Off by default; image API calls
+	// are only required for uncached photos, animations and stickers.
 	VisionOutsideModeration bool `yaml:"vision_outside_moderation"`
 	// NewUserProfileCheckEnabled runs a one-shot screening of a new member's
 	// whole public profile on their first message in a moderation chat: their
@@ -520,15 +533,21 @@ type ContentModerationConfig struct {
 	// {{reply_to}} placeholder. Longer parent/quoted messages are truncated
 	// with an ellipsis so an oversized quoted message can't bloat the prompt.
 	// <= 0 disables truncation. Defaults to 500.
-	ReplyContextMaxChars int              `yaml:"reply_context_max_chars"`
-	OCRSpaceEnabled      bool             `yaml:"ocrspace_enabled"`
-	OCRSpaceAPIKey       string           `yaml:"ocrspace_api_key" web:"sensitive"`
-	OCRSpaceURL          string           `yaml:"ocrspace_url"`
-	OCRSpaceLanguage     string           `yaml:"ocrspace_language"`
-	OCRSpaceEngine       int              `yaml:"ocrspace_engine"`
-	Prompt               PromptPair       `yaml:"prompt"`
-	WarningPrompt        PromptPair       `yaml:"warning_prompt"`
-	Rules                []ModerationRule `yaml:"rules,omitempty"`
+	ReplyContextMaxChars int        `yaml:"reply_context_max_chars"`
+	OCRSpaceEnabled      bool       `yaml:"ocrspace_enabled"`
+	OCRSpaceAPIKey       string     `yaml:"ocrspace_api_key" web:"sensitive"`
+	OCRSpaceURL          string     `yaml:"ocrspace_url"`
+	OCRSpaceLanguage     string     `yaml:"ocrspace_language"`
+	OCRSpaceEngine       int        `yaml:"ocrspace_engine"`
+	Prompt               PromptPair `yaml:"prompt"`
+	WarningPrompt        PromptPair `yaml:"warning_prompt"`
+	// WarningUseFullModel defaults to true to preserve existing warning generation.
+	WarningUseFullModel *bool            `yaml:"warning_use_full_model"`
+	Rules               []ModerationRule `yaml:"rules,omitempty"`
+}
+
+func (c *ContentModerationConfig) IsWarningUseFullModel() bool {
+	return c.WarningUseFullModel == nil || *c.WarningUseFullModel
 }
 
 // IsComplaintManualModeration reports whether a user complaint that survives
@@ -548,9 +567,11 @@ type CreativeRepliesConfig struct {
 	WebSearchEnabled         bool          `yaml:"web_search_enabled"`
 	MessageToolsEnabled      bool          `yaml:"message_tools_enabled"`
 	MessageToolsMaxLimit     int           `yaml:"message_tools_max_limit"`
+	ReputationToolEnabled    bool          `yaml:"reputation_tool_enabled"`
 	ContextOnlyCurrentTopic  *bool         `yaml:"context_only_current_topic"`
 	MaxMessages              int           `yaml:"max_messages"`
 	TimeWindow               int           `yaml:"time_window"`
+	SkipRateLimitForAdmins   bool          `yaml:"skip_rate_limit_for_admins"`
 	IncludedTopics           ChatTopicList `yaml:"included_topics"`
 	ExcludedTopics           ChatTopicList `yaml:"excluded_topics"`
 	FollowUpOnlySameUser     bool          `yaml:"follow_up_only_same_user"`

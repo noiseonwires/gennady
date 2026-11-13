@@ -388,6 +388,8 @@
   "auth.otp_send_failed": "Failed to send verification code",
 
   "config.no_fields_to_update": "No fields to update",
+  "config.secret_not_found": "Unknown sensitive configuration field",
+  "config.secret_hashed": "This password is stored as a one-way hash and cannot be revealed. Enter a new password to replace it.",
   "config.validation_failed": "Configuration validation failed",
   "config.save_failed": "Failed to save configuration",
   "config.read_file_failed": "Failed to read configuration file",

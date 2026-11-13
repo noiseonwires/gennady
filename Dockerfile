@@ -1,9 +1,9 @@
-# syntax=docker/dockerfile:1.27.0
+# syntax=docker/dockerfile:1.28.0
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2025 Kirill aka Noiseonwires
 
 # Pin to a patch version for reproducibility (adjust as needed)
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.3
 
 # Builder stage runs on the build platform (host)
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
@@ -19,8 +19,8 @@ ARG BUILD_TIME=unknown
 ARG VERSION=dev
 
 # Pinned tdewolff/minify CLI version used to shrink the embedded Web UI assets.
-# Requires Go >= 1.25 (satisfied by GO_VERSION above).
-ARG MINIFY_VERSION=v2.24.17
+# Requires Go >= 1.26 (satisfied by GO_VERSION above).
+ARG MINIFY_VERSION=v2.24.24
 
 # Debug: Show build arguments
 RUN echo "Build arguments:" && \
@@ -71,8 +71,12 @@ RUN echo "Building with ldflags:" && \
       -X 'main.buildTime=${BUILD_TIME}'" \
     -o /out/gennadium .
 
-# Final minimal runtime image
-FROM gcr.io/distroless/static:nonroot
+# FFmpeg/ffprobe render Telegram animations and stickers for image analysis.
+FROM debian:trixie-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 
 LABEL org.opencontainers.image.title="gennadium" \
     org.opencontainers.image.description="Gennady - AI-powered moderation and engagement bot for Telegram" \
@@ -82,8 +86,11 @@ LABEL org.opencontainers.image.title="gennadium" \
 
 WORKDIR /app
 
+# Relative backup paths must be writable by the runtime user.
+RUN chown 65532:65532 /app
+
 # Time zone database - required for scheduled events to honor the TZ env var.
-# distroless/static has no zoneinfo of its own, so copy it from the build stage.
+# Copy zoneinfo from the build stage.
 COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 
 COPY --from=build /out/gennadium ./gennadium
@@ -96,7 +103,7 @@ COPY --from=build /app/config.example.yaml ./config.example.yaml
 # Web UI / webhook HTTP server (see server.listen_port in config.yaml)
 EXPOSE 8080
 
-USER nonroot:nonroot
+USER 65532:65532
 
 # Prefer ENTRYPOINT for a fixed binary; CMD can pass default args if desired
 ENTRYPOINT ["./gennadium"]

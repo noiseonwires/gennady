@@ -98,3 +98,24 @@ func TestBuildCreativeReplyContext_CurrentTopicOnly(t *testing.T) {
 	assert.Contains(t, context, "same topic current")
 	assert.NotContains(t, context, "other topic secret")
 }
+
+func TestBuildCreativeReplyContext_DoesNotLeakAcrossChatsWithCollidingMessageIDs(t *testing.T) {
+	b, _ := newMockBot(t)
+	now := time.Now()
+	replyTo := 1
+	for _, message := range []database.MessageInfo{
+		{MessageID: 1, ChatID: -100, UserID: 7, Username: "alice", Text: "wanted parent", Timestamp: now},
+		{MessageID: 2, ChatID: -100, UserID: 8, Username: "bob", Text: "wanted current", ReplyToMessageID: &replyTo, Timestamp: now.Add(time.Second)},
+		{MessageID: 1, ChatID: -200, UserID: 7, Username: "alice", Text: "other chat secret parent", Timestamp: now},
+		{MessageID: 2, ChatID: -200, UserID: 8, Username: "bob", Text: "other chat secret current", ReplyToMessageID: &replyTo, Timestamp: now.Add(time.Second)},
+	} {
+		require.NoError(t, b.db.StoreMessageInfo(&message))
+	}
+	replyText := "wanted parent"
+
+	context := b.buildCreativeReplyContext("wanted current", 2, 8, -100, &replyText)
+
+	assert.Contains(t, context, "wanted parent")
+	assert.Contains(t, context, "wanted current")
+	assert.NotContains(t, context, "other chat secret")
+}

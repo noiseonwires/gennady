@@ -779,22 +779,36 @@ func (b *Bot) adminReplyIfAdminChat(chatID int64) int {
 	return 0
 }
 
-// sendMarkdownReply sends a Markdown-formatted reply, transparently retrying as
-// plain text if Telegram rejects the entities. It returns the sent message and
-// ok=false when both attempts fail (errors are logged).
-func (b *Bot) sendMarkdownReply(chatID int64, text string, replyToMessageID int) (telegram.Message, bool) {
+// sendMarkdownReply sends a Markdown-formatted reply in the source message's
+// topic, transparently retrying as plain text if Telegram rejects the entities.
+// Explicit topic targeting prevents a delayed reply from falling back to the
+// main topic if Telegram can no longer resolve the reply target.
+func (b *Bot) sendMarkdownReply(message *tgbotapi.Message, text string) (telegram.Message, bool) {
+	if message == nil {
+		log.Printf("Error sending reply: source message is nil")
+		return telegram.Message{}, false
+	}
+	threadID := messageTopic(message)
 	sent, err := b.tg.SendMessage(telegram.SendMessageParams{
-		ChatID:           chatID,
-		Text:             text,
-		ReplyToMessageID: replyToMessageID,
-		ParseMode:        telegram.ParseModeMarkdown,
+		ChatID:             message.Chat.ID,
+		Text:               text,
+		ReplyToMessageID:   message.MessageID,
+		RequireReplyTarget: true,
+		MessageThreadID:    threadID,
+		ParseMode:          telegram.ParseModeMarkdown,
 	})
 	if err != nil {
+		if errors.Is(err, telegram.ErrReplyTargetMissing) {
+			log.Printf("Not sending reply because source message %d no longer exists", message.MessageID)
+			return telegram.Message{}, false
+		}
 		log.Printf("Error sending reply with Markdown, retrying as plain text: %v", err)
 		sent, err = b.tg.SendMessage(telegram.SendMessageParams{
-			ChatID:           chatID,
-			Text:             text,
-			ReplyToMessageID: replyToMessageID,
+			ChatID:             message.Chat.ID,
+			Text:               text,
+			ReplyToMessageID:   message.MessageID,
+			RequireReplyTarget: true,
+			MessageThreadID:    threadID,
 		})
 		if err != nil {
 			log.Printf("Error sending reply as plain text: %v", err)
@@ -816,24 +830,29 @@ func (b *Bot) sendToAdminChat(text string) {
 }
 
 // sendToModerationChatWithReply sends a message to a moderation chat with proper reply logic.
-func (b *Bot) sendToModerationChatWithReply(chatID int64, text string, originalMessageID int) *telegram.Message {
-	if chatID == 0 {
+func (b *Bot) sendToModerationChatWithReply(message *tgbotapi.Message, text string) *telegram.Message {
+	if message == nil || message.Chat.ID == 0 {
 		return nil
 	}
+	threadID := messageTopic(message)
 
 	sentMsg, err := b.tg.SendMessage(telegram.SendMessageParams{
-		ChatID:           chatID,
-		Text:             text,
-		ReplyToMessageID: originalMessageID,
-		ParseMode:        telegram.ParseModeMarkdown,
+		ChatID:             message.Chat.ID,
+		Text:               text,
+		ReplyToMessageID:   message.MessageID,
+		RequireReplyTarget: true,
+		MessageThreadID:    threadID,
+		ParseMode:          telegram.ParseModeMarkdown,
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "can't parse entities") {
 			log.Printf("Markdown parse error, retrying without parse mode: %v", err)
 			sentMsg, err = b.tg.SendMessage(telegram.SendMessageParams{
-				ChatID:           chatID,
-				Text:             text,
-				ReplyToMessageID: originalMessageID,
+				ChatID:             message.Chat.ID,
+				Text:               text,
+				ReplyToMessageID:   message.MessageID,
+				RequireReplyTarget: true,
+				MessageThreadID:    threadID,
 			})
 			if err != nil {
 				log.Printf("Error sending message to moderation chat (plain text fallback): %v", err)
@@ -855,7 +874,7 @@ func (b *Bot) sendToModerationChatWithReply(chatID int64, text string, originalM
 
 // sendToModerationChatTopic posts a (deletable) message into a moderation chat,
 // targeting the given forum topic (0 = main area). Unlike
-// sendToModerationChatWithReply this does not reply to a specific message - it
+// sendToModerationChatWithReply, this does not reply to a specific message - it
 // is for scheduled/broadcast content (e.g. morning greeting) that belongs to a
 // topic rather than a conversation.
 func (b *Bot) sendToModerationChatTopic(chatID int64, text string, threadID int) *telegram.Message {

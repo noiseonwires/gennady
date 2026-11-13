@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gennadium/internal/config"
+	"gennadium/internal/database"
 	"gennadium/internal/i18n"
 )
 
@@ -634,6 +635,8 @@ func (b *Bot) matchModerationRules(response string) ([]config.ModerationRule, st
 // Azure's content safety filter fires (e.g. "content-security" → delete + report).
 const ContentSecurityTrigger = "content-security"
 
+const contentPolicyPlaceholder = "[The message was not saved, because it violated AI content policies.]"
+
 // matchContentSecurityRules checks if any configured rule uses the reserved
 // "content-security" trigger. Returns matched rules so that content-filter events
 // can be handled via the standard rule dispatch pipeline.
@@ -655,7 +658,18 @@ func (b *Bot) matchContentSecurityRules() []config.ModerationRule {
 }
 
 // generateWarningNotification generates a personalized warning notification using AI.
-func (b *Bot) generateWarningNotification(userDisplayName, userMessage, muteInfo string, userID, chatID int64) (string, error) {
+func (b *Bot) generateWarningNotification(userDisplayName, userMessage, muteInfo string, userID, chatID int64, modelVerdicts ...moderationVerdicts) (string, error) {
+	if !b.config.AI.Enabled {
+		return "", fmt.Errorf("Azure AI is not enabled")
+	}
+
+	var verdicts moderationVerdicts
+	if len(modelVerdicts) > 0 {
+		verdicts = modelVerdicts[0]
+	}
+	if verdicts.ContentFilterDetails != "" {
+		userMessage = verdicts.ContentFilterDetails
+	}
 	userMessagePart := ""
 	if userMessage != "" {
 		userMessagePart = i18n.Tf("ai.warn_user_message", userMessage)
@@ -664,19 +678,65 @@ func (b *Bot) generateWarningNotification(userDisplayName, userMessage, muteInfo
 	reputationGrade, reputationScore := b.reputationPromptValues(userID, chatID)
 	userProfile := b.getUserProfileForModeration(userID, chatID)
 	userReputation := b.getUserReputationForModeration(userID, chatID)
+	decision := verdicts.Decision
+	if decision == "" {
+		decision = verdicts.Full
+		if decision == "" {
+			decision = verdicts.Light
+		}
+	}
 	replacements := map[string]string{
-		"username":         userDisplayName,
-		"user_message":     userMessagePart,
-		"chat_rules":       b.config.ChatRulesFor(chatID),
-		"mute_info":        muteInfo,
-		"reputation":       reputationGrade,
-		"user_profile":     userProfile,
-		"user_reputation":  userReputation,
-		"reputation_score": reputationScore,
-		"reputation_grade": reputationGrade,
+		"username":           userDisplayName,
+		"message":            userMessage,
+		"user_message":       userMessagePart,
+		"chat_rules":         b.config.ChatRulesFor(chatID),
+		"mute_info":          muteInfo,
+		"reputation":         reputationGrade,
+		"user_profile":       userProfile,
+		"user_reputation":    userReputation,
+		"reputation_score":   reputationScore,
+		"reputation_grade":   reputationGrade,
+		"light_verdict":      verdicts.Light,
+		"full_verdict":       verdicts.Full,
+		"moderation_verdict": decision,
 	}
 	systemPrompt := applyReplacements(b.config.AI.ContentModeration.WarningPrompt.System, replacements)
 	prompt := applyReplacements(b.config.AI.ContentModeration.WarningPrompt.User, replacements)
 
-	return b.callAzureOpenAI("moderation_warning", prompt, systemPrompt)
+	var warning string
+	var err error
+	if b.config.AI.ContentModeration.IsWarningUseFullModel() {
+		warning, err = b.callAzureOpenAI("moderation_warning", prompt, systemPrompt)
+	} else {
+		warning, err = b.callAzureOpenAIWithRetries("moderation_warning", prompt, systemPrompt, b.config.AI.LightModel, 0, 3)
+	}
+	var cfErr *ContentFilterError
+	if userMessage != "" && verdicts.ContentFilterDetails == "" && errors.As(err, &cfErr) {
+		log.Printf("Content filter triggered during warning generation, retrying with safety analysis instead of message content")
+		verdicts.ContentFilterDetails = warningContentFilterDetails(cfErr.Details)
+		return b.generateWarningNotification(userDisplayName, "", muteInfo, userID, chatID, verdicts)
+	}
+	return warning, err
+}
+
+func warningContentFilterDetails(details string) string {
+	summary := i18n.T("mod.content_security_details")
+	if details == "" {
+		return summary
+	}
+	if strings.HasPrefix(details, summary) {
+		return details
+	}
+	return summary + "\n" + details
+}
+
+func warningVerdictsFromMessage(message *database.MessageInfo) moderationVerdicts {
+	verdicts := moderationVerdicts{Decision: message.ModerationReason}
+	if message.Text == i18n.T("filter.content_removed") || message.Text == contentPolicyPlaceholder {
+		verdicts.ContentFilterDetails = message.ExtraInfo
+		if verdicts.ContentFilterDetails == "" {
+			verdicts.ContentFilterDetails = warningContentFilterDetails("")
+		}
+	}
+	return verdicts
 }

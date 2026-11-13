@@ -3,8 +3,12 @@
 package web
 
 import (
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,6 +41,106 @@ func TestNewWebServer_TrimsTrailingSlash(t *testing.T) {
 	cfg.WebUI.PathPrefix = "/panel/"
 	ws := NewWebServer(cfg, db, NewDiagnosticsTracker(), "config.yaml", false)
 	assert.Equal(t, "/panel", ws.pathPrefix)
+}
+
+func TestWebServer_AbsolutePathPrefixes(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		publicURL string
+		admin     string
+		mod       string
+		source    string
+	}{
+		{"nested moderator prefix", "https://panel.example.com", "/admin2", "/admin2/modentry", "config"},
+		{"separate prefixes", " https://panel.example.com/ ", "/panel", "/modentry", "config"},
+		{"webhook fallback", "", "/admin2", "/admin2/modentry", "webhook"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := newTestConfig()
+			cfg.WebUI.PublicURL = tc.publicURL
+			cfg.WebUI.PathPrefix = tc.admin + "/"
+			cfg.WebUI.ModeratorPathPrefix = tc.mod + "/"
+			cfg.WebUI.Password = "secret"
+			cfg.Webhook.URL = "https://panel.example.com/secret-webhook"
+			ws := NewWebServer(cfg, newTestDB(t), NewDiagnosticsTracker(), "config.yaml", false)
+			assert.Equal(t, tc.admin, ws.pathPrefix)
+			assert.Equal(t, tc.mod, ws.moderatorPrefix)
+			info := ws.handler.moderatorUIInfo()
+			assert.Equal(t, "https://panel.example.com"+tc.mod+"/", info["url"])
+			assert.Equal(t, tc.mod, info["path_prefix"])
+			assert.Equal(t, tc.source, info["public_url_source"])
+
+			for _, prefix := range []string{ws.pathPrefix, ws.moderatorPrefix} {
+				for _, suffix := range []string{"/", "/js/page-logs-system.js", "/api/auth/mode"} {
+					rr := httptest.NewRecorder()
+					ws.Mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, prefix+suffix, nil))
+					require.Equal(t, http.StatusOK, rr.Code, prefix+suffix)
+				}
+			}
+			rr := httptest.NewRecorder()
+			ws.Mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, ws.moderatorPrefix+"/api/auth/mode", nil))
+			assert.JSONEq(t, `{"moderator":true}`, rr.Body.String())
+			rr = httptest.NewRecorder()
+			ws.Mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, ws.moderatorPrefix+"/api/config", nil))
+			assert.Equal(t, http.StatusNotFound, rr.Code)
+
+			server := httptest.NewServer(ws.Mux)
+			defer server.Close()
+			for _, role := range []string{"admin", "moderator"} {
+				t.Run(role, func(t *testing.T) {
+					jar, err := cookiejar.New(nil)
+					require.NoError(t, err)
+					client := server.Client()
+					client.Jar = jar
+					prefix := ws.pathPrefix
+					loginPath := "/api/auth/login"
+					body := `{"password":"secret"}`
+					if role == "moderator" {
+						prefix = ws.moderatorPrefix
+						loginPath = "/api/auth/mod-login"
+						token, otp := ws.auth.CreateModeratorLogin(42)
+						body = fmt.Sprintf(`{"token":%q,"code":%q}`, token, otp)
+					}
+					res, err := client.Post(server.URL+prefix+loginPath, "application/json", strings.NewReader(body))
+					require.NoError(t, err)
+					res.Body.Close()
+					require.Equal(t, http.StatusOK, res.StatusCode)
+					require.Len(t, res.Cookies(), 1)
+					assert.Equal(t, prefix, res.Cookies()[0].Path)
+
+					res, err = client.Get(server.URL + prefix + "/api/auth/check")
+					require.NoError(t, err)
+					data, err := io.ReadAll(res.Body)
+					res.Body.Close()
+					require.NoError(t, err)
+					assert.Equal(t, http.StatusOK, res.StatusCode)
+					assert.JSONEq(t, `{"authenticated":true}`, string(data))
+
+					res, err = client.Post(server.URL+prefix+"/api/auth/logout", "application/json", nil)
+					require.NoError(t, err)
+					res.Body.Close()
+					require.Equal(t, http.StatusOK, res.StatusCode)
+					require.Len(t, res.Cookies(), 1)
+					assert.Equal(t, prefix, res.Cookies()[0].Path)
+					assert.Equal(t, -1, res.Cookies()[0].MaxAge)
+
+					res, err = client.Get(server.URL + prefix + "/api/auth/check")
+					require.NoError(t, err)
+					res.Body.Close()
+					assert.Equal(t, http.StatusUnauthorized, res.StatusCode)
+				})
+			}
+		})
+	}
+}
+
+func TestWebServer_PrefixCollisionDisablesModeratorUI(t *testing.T) {
+	cfg := newTestConfig()
+	cfg.WebUI.PublicURL = "https://panel.example.com"
+	cfg.WebUI.ModeratorPathPrefix = cfg.WebUI.PathPrefix
+	ws := NewWebServer(cfg, newTestDB(t), NewDiagnosticsTracker(), "config.yaml", false)
+	assert.Empty(t, ws.moderatorPrefix)
+	assert.Equal(t, false, ws.handler.moderatorUIInfo()["available"])
 }
 
 func TestWebServer_Auth(t *testing.T) {
@@ -141,6 +245,41 @@ func TestServeMux_ProtectedEndpointRequiresAuth(t *testing.T) {
 	rr := httptest.NewRecorder()
 	ws.Mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/api/stats", nil))
 	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+}
+
+func TestServeMux_ConfigSecretRequiresSuperAdmin(t *testing.T) {
+	ws := newTestServer(t)
+	ws.handler.config.BotToken = "actual-token"
+	adminSession := ws.auth.CreatePasswordSession()
+	token, otp := ws.auth.CreateModeratorLogin(42)
+	modSession, err := ws.auth.ValidateModeratorLogin(token, otp, "ip")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		token  string
+		status int
+	}{
+		{"anonymous", "", http.StatusUnauthorized},
+		{"invalid", "invalid-session", http.StatusUnauthorized},
+		{"moderator", modSession, http.StatusUnauthorized},
+		{"super-admin", adminSession, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/admin/api/config/secret?key=bot_token", nil)
+			if tc.token != "" {
+				r.AddCookie(&http.Cookie{Name: webSessionCookieName, Value: tc.token})
+			}
+			ws.Mux.ServeHTTP(rr, r)
+			assert.Equal(t, tc.status, rr.Code)
+			if tc.status == http.StatusOK {
+				assert.Equal(t, "actual-token", decodeErrBody(t, rr)["value"])
+			} else {
+				assert.NotContains(t, rr.Body.String(), "actual-token")
+			}
+		})
+	}
 }
 
 func TestHandleConfigRoute_MethodDispatch(t *testing.T) {
